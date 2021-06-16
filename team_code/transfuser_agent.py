@@ -31,9 +31,6 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
 		self.wall_start = time.time()
 		self.initialized = False
 
-		args_file = open(os.path.join(path_to_conf_file, 'args.txt'), 'r')
-		self.args = json.load(args_file)
-		args_file.close()
 		self.input_buffer = {'rgb': deque(), 'rgb_left': deque(), 'rgb_right': deque(), 
 							'rgb_rear': deque(), 'lidar': deque(), 'gps': deque(), 'thetas': deque()}
 
