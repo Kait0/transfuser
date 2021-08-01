@@ -467,12 +467,13 @@ class TransFuser(nn.Module):
 
         return pred_wp
 
-    def control_pid(self, waypoints, velocity):
+    def control_pid(self, waypoints, velocity, is_stuck):
         ''' 
         Predicts vehicle control with a PID controller.
         Args:
             waypoints (tensor): predicted waypoints
             velocity (tensor): speedometer input
+            is_stuck (bool):   indicates whether the agent unneccessarily got stuck
         '''
         assert(waypoints.size(0)==1)
         waypoints = waypoints[0].data.cpu().numpy()
@@ -481,7 +482,10 @@ class TransFuser(nn.Module):
         waypoints[:,1] *= -1
         speed = velocity[0].data.cpu().numpy()
 
-        desired_speed = np.linalg.norm(waypoints[0] - waypoints[1]) * 2.0
+        if(is_stuck == False):
+            desired_speed = np.linalg.norm(waypoints[0] - waypoints[1]) * 2.0
+        else:
+            desired_speed = np.array(4.0) # Default speed of 14.4 km/h
         brake = desired_speed < self.config.brake_speed or (speed / desired_speed) > self.config.brake_ratio
 
         aim = (waypoints[1] + waypoints[0]) / 2.0
