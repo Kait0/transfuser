@@ -39,6 +39,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         
         self.stuck_detector = 0
         self.forced_move    = 0
+        self.safety_area    = []
 
         self.input_buffer = {'rgb': deque(), 'rgb_left': deque(), 'rgb_right': deque(), 
                             'rgb_rear': deque(), 'lidar': deque(), 'gps': deque(), 'thetas': deque()}
@@ -252,6 +253,18 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
                 curr_theta = self.input_buffer['thetas'][i]
                 curr_x, curr_y = self.input_buffer['gps'][i]
                 lidar_point_cloud[:,1] *= -1 # inverts x, y
+                
+                #Check safety area
+                # Defines a cube of 1m length in front of the car.
+                correct_height         = np.logical_and((lidar_point_cloud[..., 2] > -2.0),   (lidar_point_cloud[..., 2] < -0.98))
+                correct_length         = np.logical_and((lidar_point_cloud[..., 1] > -2.75),  (lidar_point_cloud[..., 1] < 0.0))
+                correct_width          = np.logical_and((lidar_point_cloud[..., 0] > -1.066), (lidar_point_cloud[..., 0] < 1.066))
+                correct_height_length  = np.logical_and(correct_height,                        correct_length)
+                correct_total_position = np.logical_and(correct_height_length,                 correct_width)
+                self.safety_area       = lidar_point_cloud[correct_total_position]
+                
+                
+                #Voxelize to BEV for NN to process
                 lidar_transformed = transform_2d_points(lidar_point_cloud,
                         np.pi/2-curr_theta, -curr_x, -curr_y, np.pi/2-ego_theta, -ego_x, -ego_y)
                 lidar_transformed = torch.from_numpy(lidar_to_histogram_features(lidar_transformed, crop=self.config.input_resolution)).unsqueeze(0)
@@ -264,7 +277,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
                                self.lidar_processed, target_point, gt_velocity)
 
         is_stuck = False
-        if(self.stuck_detector > 600 and self.forced_move < 30): # 600 = 30 seconds * 20 Frames per second, we move for 1.5 second = 30 frames to unblock
+        if(self.stuck_detector > 900 and self.forced_move < 30): # 900 = 45 seconds * 20 Frames per second, we move for 1.5 second = 30 frames to unblock
             print("Detected agent being stuck. Move for frame: ", self.forced_move)
             is_stuck = True
             self.forced_move += 1
@@ -281,15 +294,10 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             self.forced_move    = 0
 
         # Safety controller. Stops the car in case something is directly in front of it.
-        safety_area = self.lidar_processed[0].cpu().numpy()[0, 1][122:130, 238:247] # Points that are directly in front of the car.
-        #from matplotlib import pyplot as plt
-        #plt.ion()
-        #plt.imshow(test, interpolation='nearest')
-        #plt.show()
         control = carla.VehicleControl()
-        num_lidar_hits_safety_area = sum(sum(safety_area))
-        if(num_lidar_hits_safety_area > 1.0): #Means that more than 5 lidar hits (it's normalized by 5) are in the safety area in front of the car
-            print("Detected object directly in front of the vehicle. Stopping.")
+        emergency_stop = (len(self.safety_area) > 0) #Checks if the List is empty
+        if(emergency_stop):
+            print("Detected object directly in front of the vehicle. Stopping. Step:", self.step)
             control.steer = float(steer)
             control.throttle = float(0.0)
             control.brake = float(True)
