@@ -7,6 +7,48 @@ from torch import nn
 import torch.nn.functional as F
 from torchvision import models
 
+from resnet import *
+
+
+class ImageCNN2(nn.Module):
+    """ Encoder network for image input list.
+    Args:
+        c_dim (int): output dimension of the latent embedding
+        normalize (bool): whether the input images should be normalized
+        use_linear (bool): whether a final linear layer should be used
+    """
+
+    def __init__(self, c_dim, normalize=True, use_linear=False, **kwargs):
+        super().__init__()
+        self.normalize = normalize
+        self.use_linear = use_linear
+        self.model_type = kwargs.get('model_type')
+
+        if self.model_type == 'resnet18':
+            self.features = resnet18(pretrained=True)
+            self.features.fc = nn.Sequential()
+
+        elif self.model_type == 'resnet34':
+            self.features = resnet34(pretrained=True)
+            self.features.fc = nn.Sequential()
+
+        if use_linear:
+            self.fc = nn.Linear(512, c_dim)
+        elif c_dim == 512:
+            self.fc = nn.Sequential()
+        else:
+            raise ValueError('c_dim must be 512 if use_linear is False')
+
+    def forward(self, inputs):
+        c = 0
+        c_inter = 0
+        for x in inputs:
+            if self.normalize:
+                x = normalize_imagenet(x)
+            net, inter = self.features(x)
+            c += self.fc(net)
+            c_inter += inter
+        return c, c_inter
 
 class ImageCNN(nn.Module):
     """ 
@@ -36,11 +78,22 @@ def normalize_imagenet(x):
         x (tensor): input images
     """
     x = x.clone()
-    x[:, 0] = (x[:, 0] - 0.485) / 0.229
-    x[:, 1] = (x[:, 1] - 0.456) / 0.224
-    x[:, 2] = (x[:, 2] - 0.406) / 0.225
+    x[:, 0] = ((x[:, 0] / 255.0) - 0.485) / 0.229
+    x[:, 1] = ((x[:, 1] / 255.0) - 0.456) / 0.224
+    x[:, 2] = ((x[:, 2] / 255.0) - 0.406) / 0.225
     return x
 
+#TODO look into R2-1D models.video.r2plus1d_18(
+def normalize_kinetics(x): #TODO test and check for 4D transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    """ Normalize input images according to Kinetics-400 standards. 
+        Args:
+            x (tensor): input images
+    """
+    x = x.clone()
+    x[:, 0] = ((x[:, 0] / 255.0) - 0.43216)  / 0.22803
+    x[:, 1] = ((x[:, 1] / 255.0) - 0.394666) / 0.22145
+    x[:, 2] = ((x[:, 2] / 255.0) - 0.37645)  / 0.216989
+    return x
 
 class LidarEncoder(nn.Module):
     """
@@ -148,7 +201,7 @@ class GPT(nn.Module):
         self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * seq_len * vert_anchors * horz_anchors, n_embd))
         
         # velocity embedding
-        self.vel_emb = nn.Linear(1, n_embd)
+        self.vel_emb = nn.Linear(self.seq_len, n_embd) #TODO test seq ke
         self.drop = nn.Dropout(embd_pdrop)
 
         # transformer
@@ -254,6 +307,10 @@ class Encoder(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((self.config.vert_anchors, self.config.horz_anchors))
         
         self.image_encoder = ImageCNN(512, normalize=True)
+
+        #TODO to use pretraining we need to repeat our kernel weights 3 times and divide the output by 3
+        #test = self.image_encoder.features.conv1.weight.repeat_interleave(3, dim=1)
+        
         self.lidar_encoder = LidarEncoder(num_classes=512, in_channels=2)
 
         self.transformer1 = GPT(n_embd=64,
@@ -318,8 +375,8 @@ class Encoder(nn.Module):
         lidar_channel = lidar_list[0].shape[1]
         self.config.n_views = len(image_list) // self.config.seq_len
 
-        image_tensor = torch.stack(image_list, dim=1).view(bz * self.config.n_views * self.config.seq_len, img_channel, h, w)
-        lidar_tensor = torch.stack(lidar_list, dim=1).view(bz * self.config.seq_len, lidar_channel, h, w)
+        image_tensor = torch.cat(image_list, dim=1).view(bz * self.config.n_views, img_channel * self.config.seq_len, h, w)
+        lidar_tensor = torch.cat(lidar_list, dim=1)#.view(bz, lidar_channel * self.config.seq_len, h, w)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
         image_features = self.image_encoder.features.bn1(image_features)
@@ -374,10 +431,10 @@ class Encoder(nn.Module):
 
         image_features = self.image_encoder.features.avgpool(image_features)
         image_features = torch.flatten(image_features, 1)
-        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1)
+        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1) #TODO
         lidar_features = self.lidar_encoder._model.avgpool(lidar_features)
         lidar_features = torch.flatten(lidar_features, 1)
-        lidar_features = lidar_features.view(bz, self.config.seq_len, -1)
+        lidar_features = lidar_features.view(bz, self.config.seq_len, -1) #TODO
 
         fused_features = torch.cat([image_features, lidar_features], dim=1)
         fused_features = torch.sum(fused_features, dim=1)
@@ -446,6 +503,7 @@ class TransFuser(nn.Module):
             target_point (tensor): goal location registered to ego-frame
             velocity (tensor): input velocity from speedometer
         '''
+        velocity = torch.stack(velocity, dim=1)
         fused_features = self.encoder(image_list, lidar_list, velocity)
         z = self.join(fused_features)
 

@@ -3,18 +3,8 @@ import os
 class GlobalConfig:
     """ base architecture configurations """
 	# Data
-    seq_len = 1 # input timesteps
+    seq_len = 3 # input timesteps
     pred_len = 4 # future waypoints predicted
-
-    root_dir = '/mnt/qb/geiger/kchitta31/data_06_21'
-    train_towns = ['Town01', 'Town02', 'Town03', 'Town04', 'Town06', 'Town07', 'Town10']
-    val_towns = ['Town05']
-    train_data, val_data = [], []
-    for town in train_towns:
-        train_data.append(os.path.join(root_dir, town+''))
-        train_data.append(os.path.join(root_dir, town+'_small'))
-    for town in val_towns:
-        val_data.append(os.path.join(root_dir, town+''))
 
     ignore_sides = True # don't consider side cameras
     ignore_rear = True # don't consider rear cameras
@@ -58,6 +48,35 @@ class GlobalConfig:
     brake_ratio = 1.1 # ratio of speed to desired speed at which brake is triggered
     clip_delta = 0.25 # maximum change in speed input to logitudinal controller
 
-    def __init__(self, **kwargs):
+    def __init__(self, machine=0, **kwargs):
+        if (machine == 0):
+            self.root_dir = '/mnt/qb/geiger/kchitta31/data_06_21'
+            self.train_towns = ['Town01', 'Town02', 'Town03', 'Town04', 'Town05', 'Town06', 'Town07', 'Town10']
+            self.val_towns   = ['Town01', 'Town02', 'Town03', 'Town04', 'Town05', 'Town06']
+            self.train_data, self.val_data = [], []
+            for town in self.train_towns:
+                self.train_data.append(os.path.join(self.root_dir, town + ''))
+                self.train_data.append(os.path.join(self.root_dir, town + '_small'))
+            for town in self.val_towns:
+                self.val_data.append(os.path.join(self.root_dir, town + '_long'))
+        elif(machine == 1): #For local debug purposes
+            self.root_dir = r"C:\Users\Admin\Ordnung\Studium\Master_Informatik\Masterarbeit\Masterthesis\src\DirectPerception\data"
+            self.train_towns = ['Town01']
+            self.val_towns = ['Town01']
+            self.train_data, self.val_data = [], []
+            for town in self.train_towns:
+                self.train_data.append(os.path.join(self.root_dir, town + ''))
+            for town in self.val_towns:
+                self.val_data.append(os.path.join(self.root_dir, town + ''))
+        else:
+            self.root_dir = r"C:\Users\admin\Ordnung\Studium\Masterarbeit\Masterthesis\src\DirectPerception\data"
+            self.train_towns = ['Town01']
+            self.val_towns = ['Town01']
+            self.train_data, self.val_data = [], []
+            for town in self.train_towns:
+                self.train_data.append(os.path.join(self.root_dir, town + ''))
+            for town in self.val_towns:
+                self.val_data.append(os.path.join(self.root_dir, town + ''))
+        
         for k,v in kwargs.items():
             setattr(self, k, v)
