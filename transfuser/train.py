@@ -131,11 +131,13 @@ class Engine(object):
                 rights_in = data['rights']
                 rears_in = data['rears']
                 lidars_in = data['lidars']
+                velocities_in = data['velocity']
                 fronts = []
                 lefts = []
                 rights = []
                 rears = []
                 lidars = []
+                velocities = []
                 for i in range(config.seq_len):
                     fronts.append(fronts_in[i].to(args.device, dtype=torch.float32))
                     if not config.ignore_sides:
@@ -144,10 +146,11 @@ class Engine(object):
                     if not config.ignore_rear:
                         rears.append(rears_in[i].to(args.device, dtype=torch.float32))
                     lidars.append(lidars_in[i].to(args.device, dtype=torch.float32))
+                    velocities.append(velocities_in[i].to(args.device, dtype=torch.float32))
+
 
                 # driving labels
                 command = data['command'].to(args.device)
-                gt_velocity = data['velocity'].to(args.device, dtype=torch.float32)
                 gt_steer = data['steer'].to(args.device, dtype=torch.float32)
                 gt_throttle = data['throttle'].to(args.device, dtype=torch.float32)
                 gt_brake = data['brake'].to(args.device, dtype=torch.float32)
@@ -155,7 +158,7 @@ class Engine(object):
                 # target point
                 target_point = torch.stack(data['target_point'], dim=1).to(args.device, dtype=torch.float32)
 
-                pred_wp = model(fronts+lefts+rights+rears, lidars, target_point, gt_velocity)
+                pred_wp = model(fronts+lefts+rights+rears, lidars, target_point, velocities)
 
                 gt_waypoints = [torch.stack(data['waypoints'][i], dim=1).to(args.device, dtype=torch.float32) for i in range(config.seq_len, len(data['waypoints']))]
                 gt_waypoints = torch.stack(gt_waypoints, dim=1).to(args.device, dtype=torch.float32)
