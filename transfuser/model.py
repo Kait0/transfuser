@@ -7,49 +7,6 @@ from torch import nn
 import torch.nn.functional as F
 from torchvision import models
 
-from resnet import *
-
-
-class ImageCNN2(nn.Module):
-    """ Encoder network for image input list.
-    Args:
-        c_dim (int): output dimension of the latent embedding
-        normalize (bool): whether the input images should be normalized
-        use_linear (bool): whether a final linear layer should be used
-    """
-
-    def __init__(self, c_dim, normalize=True, use_linear=False, **kwargs):
-        super().__init__()
-        self.normalize = normalize
-        self.use_linear = use_linear
-        self.model_type = kwargs.get('model_type')
-
-        if self.model_type == 'resnet18':
-            self.features = resnet18(pretrained=True)
-            self.features.fc = nn.Sequential()
-
-        elif self.model_type == 'resnet34':
-            self.features = resnet34(pretrained=True)
-            self.features.fc = nn.Sequential()
-
-        if use_linear:
-            self.fc = nn.Linear(512, c_dim)
-        elif c_dim == 512:
-            self.fc = nn.Sequential()
-        else:
-            raise ValueError('c_dim must be 512 if use_linear is False')
-
-    def forward(self, inputs):
-        c = 0
-        c_inter = 0
-        for x in inputs:
-            if self.normalize:
-                x = normalize_imagenet(x)
-            net, inter = self.features(x)
-            c += self.fc(net)
-            c_inter += inter
-        return c, c_inter
-
 class ImageCNN(nn.Module):
     """ 
     Encoder network for image input list.
@@ -69,6 +26,28 @@ class ImageCNN(nn.Module):
         for x in inputs:
             if self.normalize:
                 x = normalize_imagenet(x)
+            c += self.features(x)
+        return c
+    
+class ImageCNN3(nn.Module):
+    """ 
+    Encoder network for image input list.
+    Args:
+        c_dim (int): output dimension of the latent embedding
+        normalize (bool): whether the input images should be normalized
+    """
+
+    def __init__(self, c_dim, normalize=True):
+        super().__init__()
+        self.normalize = normalize
+        self.features = models.video.r2plus1d_18(pretrained=True)
+        self.features.fc = nn.Sequential()
+
+    def forward(self, inputs):
+        c = 0
+        for x in inputs:
+            if self.normalize:
+                x = normalize_kinetics(x)
             c += self.features(x)
         return c
 
@@ -111,6 +90,31 @@ class LidarEncoder(nn.Module):
         _tmp = self._model.conv1
         self._model.conv1 = nn.Conv2d(in_channels, out_channels=_tmp.out_channels, 
             kernel_size=_tmp.kernel_size, stride=_tmp.stride, padding=_tmp.padding, bias=_tmp.bias)
+
+    def forward(self, inputs):
+        features = 0
+        for lidar_data in inputs:
+            lidar_feature = self._model(lidar_data)
+            features += lidar_feature
+
+        return features
+
+#With temporal reasoning
+class LidarEncoder3(nn.Module):
+    """
+    Encoder network for LiDAR input list
+    Args:
+        num_classes: output feature dimension
+        in_channels: input channels
+    """
+
+    def __init__(self, num_classes=512, in_channels=2):
+        super().__init__()
+
+        self._model = models.video.r2plus1d_18()
+        self._model.fc = nn.Sequential()
+        _tmp = self._model.stem._modules['0']
+        self._model.stem._modules['0'] = nn.Conv3d(in_channels, out_channels=_tmp.out_channels, kernel_size=_tmp.kernel_size, stride=_tmp.stride, padding=_tmp.padding, bias=_tmp.bias)
 
     def forward(self, inputs):
         features = 0
@@ -192,16 +196,16 @@ class GPT(nn.Module):
                     embd_pdrop, attn_pdrop, resid_pdrop, config):
         super().__init__()
         self.n_embd = n_embd
-        self.seq_len = 1#seq_len #Note we do temporal reasoning by stacking frames currently
+        self.seq_len = seq_len
         self.vert_anchors = vert_anchors
         self.horz_anchors = horz_anchors
         self.config = config
 
         # positional embedding parameter (learnable), image + lidar
-        self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * 1 * vert_anchors * horz_anchors, n_embd))#seq_len
+        self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * seq_len * vert_anchors * horz_anchors, n_embd))#
         
         # velocity embedding
-        self.vel_emb = nn.Linear(self.seq_len, n_embd) #TODO test seq ke
+        self.vel_emb = nn.Linear(self.config.seq_len, n_embd)
         self.drop = nn.Dropout(embd_pdrop)
 
         # transformer
@@ -212,7 +216,7 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(n_embd)
 
-        self.block_size = 1#seq_len
+        self.block_size = seq_len
         self.apply(self._init_weights)
 
     def get_block_size(self):
@@ -267,33 +271,33 @@ class GPT(nn.Module):
             velocity (tensor): ego-velocity
         """
         
-        bz = lidar_tensor.shape[0] // self.seq_len
-        h, w = lidar_tensor.shape[2:4]
+        bz = lidar_tensor.shape[0]#  // self.seq_len
+        h, w = lidar_tensor.shape[3:5]
+        t = lidar_tensor.shape[2]
         
         # forward the image model for token embeddings
-        image_tensor = image_tensor.view(bz, self.config.n_views * self.seq_len, -1, h, w)
-        lidar_tensor = lidar_tensor.view(bz, self.seq_len, -1, h, w)
+        image_tensor = image_tensor.view(bz, -1, self.config.n_views * t, h, w)
+        lidar_tensor = lidar_tensor.view(bz, -1, t, h, w)
 
         # pad token embeddings along number of tokens dimension
-        token_embeddings = torch.cat([image_tensor, lidar_tensor], dim=1).permute(0,1,3,4,2).contiguous()
+        token_embeddings = torch.cat([image_tensor, lidar_tensor], dim=2).permute(0,2,3,4,1).contiguous() #(bz, t, h, w, c)
         token_embeddings = token_embeddings.view(bz, -1, self.n_embd) # (B, an * T, C)
 
         # project velocity to n_embed
-        velocity_embeddings = self.vel_emb(velocity) # (B, C) .unsqueeze(1)
+        velocity_embeddings = self.vel_emb(velocity).unsqueeze(1) # (B, C) .unsqueeze(1)
 
         # add (learnable) positional embedding and velocity embedding for all tokens
-        x = self.drop(self.pos_emb + token_embeddings + velocity_embeddings.unsqueeze(1)) #(B, an * T, C)
+        x = self.drop(self.pos_emb + token_embeddings + velocity_embeddings) #(B, an * T, C)
         # x = self.drop(token_embeddings + velocity_embeddings.unsqueeze(1)) # (B, an * T, C)
         x = self.blocks(x) # (B, an * T, C)
         x = self.ln_f(x) # (B, an * T, C)
-        x = x.view(bz, (self.config.n_views + 1) * self.seq_len, self.vert_anchors, self.horz_anchors, self.n_embd)
-        x = x.permute(0,1,4,2,3).contiguous() # same as token_embeddings
+        x = x.view(bz, (self.config.n_views + 1) * t, self.vert_anchors, self.horz_anchors, self.n_embd)
+        x = x.permute(0,4,1,2,3).contiguous() # same as token_embeddings
 
-        image_tensor_out = x[:, :self.config.n_views*self.seq_len, :, :, :].contiguous().view(bz * self.config.n_views * self.seq_len, -1, h, w)
-        lidar_tensor_out = x[:, self.config.n_views*self.seq_len:, :, :, :].contiguous().view(bz * self.seq_len, -1, h, w)
+        image_tensor_out = x[:, :, :self.config.n_views*t, :, :].contiguous()#.view(bz * self.config.n_views * self.seq_len, -1, h, w)
+        lidar_tensor_out = x[:, :, self.config.n_views*t:, :, :].contiguous()#.view(bz * self.seq_len, -1, h, w)
         
         return image_tensor_out, lidar_tensor_out
-
 
 class Encoder(nn.Module):
     """
@@ -304,15 +308,12 @@ class Encoder(nn.Module):
         super().__init__()
         self.config = config
 
-        self.avgpool = nn.AdaptiveAvgPool2d((self.config.vert_anchors, self.config.horz_anchors))
+        self.avgpool = nn.AdaptiveAvgPool3d((None, self.config.vert_anchors, self.config.horz_anchors))
+        self.maxpool = torch.nn.MaxPool3d(kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1))
         
-        self.image_encoder = ImageCNN(512, normalize=True)
-
-        #to use pretraining we need to repeat our kernel weights 3 times and divide the output by 3
-        self.image_encoder.features.conv1.weight = nn.Parameter(self.image_encoder.features.conv1.weight.repeat_interleave(self.config.seq_len, dim=1))
+        self.image_encoder = ImageCNN3(512, normalize=True)
         
-        self.lidar_encoder = LidarEncoder(num_classes=512, in_channels=2)
-        self.lidar_encoder._model.conv1.weight = nn.Parameter(self.lidar_encoder._model.conv1.weight.repeat_interleave(self.config.seq_len, dim=1))
+        self.lidar_encoder = LidarEncoder3(num_classes=512, in_channels=2)
 
         
 
@@ -333,7 +334,7 @@ class Encoder(nn.Module):
                             n_layer=config.n_layer, 
                             vert_anchors=config.vert_anchors, 
                             horz_anchors=config.horz_anchors, 
-                            seq_len=config.seq_len, 
+                            seq_len=config.seq_len-1, 
                             embd_pdrop=config.embd_pdrop, 
                             attn_pdrop=config.attn_pdrop, 
                             resid_pdrop=config.resid_pdrop,
@@ -344,7 +345,7 @@ class Encoder(nn.Module):
                             n_layer=config.n_layer, 
                             vert_anchors=config.vert_anchors, 
                             horz_anchors=config.horz_anchors, 
-                            seq_len=config.seq_len, 
+                            seq_len=config.seq_len-2, 
                             embd_pdrop=config.embd_pdrop, 
                             attn_pdrop=config.attn_pdrop, 
                             resid_pdrop=config.resid_pdrop,
@@ -355,7 +356,7 @@ class Encoder(nn.Module):
                             n_layer=config.n_layer, 
                             vert_anchors=config.vert_anchors, 
                             horz_anchors=config.horz_anchors, 
-                            seq_len=config.seq_len, 
+                            seq_len=config.seq_len-2, 
                             embd_pdrop=config.embd_pdrop, 
                             attn_pdrop=config.attn_pdrop, 
                             resid_pdrop=config.resid_pdrop,
@@ -378,72 +379,66 @@ class Encoder(nn.Module):
         lidar_channel = lidar_list[0].shape[1]
         self.config.n_views = len(image_list) // self.config.seq_len
 
-        image_tensor = torch.cat(image_list, dim=1).view(bz * self.config.n_views, img_channel * self.config.seq_len, h, w)
-        lidar_tensor = torch.cat(lidar_list, dim=1)#.view(bz, lidar_channel * self.config.seq_len, h, w)
+        image_tensor = torch.stack(image_list, dim=2).view(bz * self.config.n_views, img_channel, self.config.seq_len, h, w)
+        lidar_tensor = torch.stack(lidar_list, dim=2)#.view(bz, lidar_channel * self.config.seq_len, h, w)
 
-        image_features = self.image_encoder.features.conv1(image_tensor)
-        image_features = image_features / self.config.seq_len # For stacked temporal reasoning
-        image_features = self.image_encoder.features.bn1(image_features)
-        image_features = self.image_encoder.features.relu(image_features)
-        image_features = self.image_encoder.features.maxpool(image_features)
-        lidar_features = self.lidar_encoder._model.conv1(lidar_tensor)
-        lidar_features = lidar_features / self.config.seq_len # For stacked temporal reasoning
-        lidar_features = self.lidar_encoder._model.bn1(lidar_features)
-        lidar_features = self.lidar_encoder._model.relu(lidar_features)
-        lidar_features = self.lidar_encoder._model.maxpool(lidar_features)
+        image_features = self.image_encoder.features.stem(image_tensor)     #(bz, 64, t, 128, 128)
+        lidar_features = self.lidar_encoder._model.stem(lidar_tensor)       #(bz, 64, t, 128, 128)
+        image_features = self.maxpool(image_features)
+        lidar_features = self.maxpool(lidar_features)
+        image_features = self.image_encoder.features.layer1(image_features) #(bz, 64, t, 128, 128)
+        lidar_features = self.lidar_encoder._model.layer1(lidar_features)   #(bz, 64, t, 128, 128)
 
-        image_features = self.image_encoder.features.layer1(image_features)
-        lidar_features = self.lidar_encoder._model.layer1(lidar_features)
-        # fusion at (B, 64, 64, 64)
         image_embd_layer1 = self.avgpool(image_features)
         lidar_embd_layer1 = self.avgpool(lidar_features)
+        
         image_features_layer1, lidar_features_layer1 = self.transformer1(image_embd_layer1, lidar_embd_layer1, velocity)
-        image_features_layer1 = F.interpolate(image_features_layer1, scale_factor=8, mode='bilinear')
-        lidar_features_layer1 = F.interpolate(lidar_features_layer1, scale_factor=8, mode='bilinear')
-        image_features = image_features + image_features_layer1
-        lidar_features = lidar_features + lidar_features_layer1
+        image_features_layer1 = F.interpolate(image_features_layer1.view(bz, -1, self.config.vert_anchors, self.config.horz_anchors), scale_factor=8, mode='bilinear')
+        lidar_features_layer1 = F.interpolate(lidar_features_layer1.view(bz, -1, self.config.vert_anchors, self.config.horz_anchors), scale_factor=8, mode='bilinear')
+        x = image_features_layer1.view(bz, -1, self.config.seq_len, self.config.vert_anchors * 8, self.config.horz_anchors * 8)
+        image_features = image_features + image_features_layer1.view(bz, -1, self.config.seq_len, self.config.vert_anchors * 8, self.config.horz_anchors * 8)
+        lidar_features = lidar_features + lidar_features_layer1.view(bz, -1, self.config.seq_len, self.config.vert_anchors * 8, self.config.horz_anchors * 8)
 
-        image_features = self.image_encoder.features.layer2(image_features)
-        lidar_features = self.lidar_encoder._model.layer2(lidar_features)
-        # fusion at (B, 128, 32, 32)
-        image_embd_layer2 = self.avgpool(image_features)
-        lidar_embd_layer2 = self.avgpool(lidar_features)
-        image_features_layer2, lidar_features_layer2 = self.transformer2(image_embd_layer2, lidar_embd_layer2, velocity)
-        image_features_layer2 = F.interpolate(image_features_layer2, scale_factor=4, mode='bilinear')
-        lidar_features_layer2 = F.interpolate(lidar_features_layer2, scale_factor=4, mode='bilinear')
-        image_features = image_features + image_features_layer2
-        lidar_features = lidar_features + lidar_features_layer2
+        image_features = self.image_encoder.features.layer2(image_features)  # (bz, 128, t-1, 64, 64)
+        lidar_features = self.lidar_encoder._model.layer2(lidar_features)    # (bz, 128, t-1, 64, 64)
+        image_embd_layer2 = self.avgpool(image_features)# (bz, 128, t-1, vert_ancor, hor_ancor)
+        lidar_embd_layer2 = self.avgpool(lidar_features)# (bz, 128, t-1, vert_ancor, hor_ancor)
 
-        image_features = self.image_encoder.features.layer3(image_features)
-        lidar_features = self.lidar_encoder._model.layer3(lidar_features)
-        # fusion at (B, 256, 16, 16)
-        image_embd_layer3 = self.avgpool(image_features)
-        lidar_embd_layer3 = self.avgpool(lidar_features)
+        image_features_layer2, lidar_features_layer2 = self.transformer2(image_embd_layer2, lidar_embd_layer2, velocity) #(bz, 128,t-1, vert_ancor, hor_ancor)
+        image_features_layer2 = F.interpolate(image_features_layer2.view(bz, -1, self.config.vert_anchors, self.config.horz_anchors), scale_factor=4, mode='bilinear')
+        lidar_features_layer2 = F.interpolate(lidar_features_layer2.view(bz, -1, self.config.vert_anchors, self.config.horz_anchors), scale_factor=4, mode='bilinear')
+        image_features = image_features + image_features_layer2.view(bz, -1, self.config.seq_len - 1, self.config.vert_anchors * 4, self.config.horz_anchors * 4)
+        lidar_features = lidar_features + lidar_features_layer2.view(bz, -1, self.config.seq_len - 1, self.config.vert_anchors * 4, self.config.horz_anchors * 4)
+        # (bz, 128,t-1, 64, 64)
+
+        image_features = self.image_encoder.features.layer3(image_features) # (bz, 256,t-2, 32, 32)
+        lidar_features = self.lidar_encoder._model.layer3(lidar_features)   # (bz, 256,t-2, 32, 32)
+        image_embd_layer3 = self.avgpool(image_features) # (bz, 256,t-2, 16, 16)
+        lidar_embd_layer3 = self.avgpool(lidar_features) # (bz, 256,t-2, 16, 16)
         image_features_layer3, lidar_features_layer3 = self.transformer3(image_embd_layer3, lidar_embd_layer3, velocity)
-        image_features_layer3 = F.interpolate(image_features_layer3, scale_factor=2, mode='bilinear')
-        lidar_features_layer3 = F.interpolate(lidar_features_layer3, scale_factor=2, mode='bilinear')
-        image_features = image_features + image_features_layer3
-        lidar_features = lidar_features + lidar_features_layer3
+        image_features_layer3 = F.interpolate(image_features_layer3.view(bz, -1, self.config.vert_anchors, self.config.horz_anchors), scale_factor=2, mode='bilinear')
+        lidar_features_layer3 = F.interpolate(lidar_features_layer3.view(bz, -1, self.config.vert_anchors, self.config.horz_anchors), scale_factor=2, mode='bilinear')
+        image_features = image_features + image_features_layer3.view(bz, -1, self.config.seq_len - 2, self.config.vert_anchors * 2, self.config.horz_anchors * 2)
+        lidar_features = lidar_features + lidar_features_layer3.view(bz, -1, self.config.seq_len - 2, self.config.vert_anchors * 2, self.config.horz_anchors * 2)
 
-        image_features = self.image_encoder.features.layer4(image_features)
-        lidar_features = self.lidar_encoder._model.layer4(lidar_features)
-        # fusion at (B, 512, 8, 8)
+        image_features = self.image_encoder.features.layer4(image_features)  # (bz, 512 ,t-2, 16, 16)
+        lidar_features = self.lidar_encoder._model.layer4(lidar_features)    # (bz, 512 ,t-2, 16, 16)
         image_embd_layer4 = self.avgpool(image_features)
         lidar_embd_layer4 = self.avgpool(lidar_features)
         image_features_layer4, lidar_features_layer4 = self.transformer4(image_embd_layer4, lidar_embd_layer4, velocity)
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
 
-        image_features = self.image_encoder.features.avgpool(image_features)
+        image_features = self.image_encoder.features.avgpool(image_features) #(bz, 512, 1,1,1)
         image_features = torch.flatten(image_features, 1)
-        image_features = image_features.view(bz, self.config.n_views * 1, -1) #self.config.seq_len
+        image_features = image_features.view(bz, self.config.n_views * 1, -1)  # self.config.seq_len
         lidar_features = self.lidar_encoder._model.avgpool(lidar_features)
         lidar_features = torch.flatten(lidar_features, 1)
-        lidar_features = lidar_features.view(bz, 1, -1) #elf.config.seq_len
+        lidar_features = lidar_features.view(bz, 1, -1)  # self.config.seq_len
 
         fused_features = torch.cat([image_features, lidar_features], dim=1)
         fused_features = torch.sum(fused_features, dim=1)
-
+        
         return fused_features
 
 
