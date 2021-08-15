@@ -20,6 +20,8 @@ from team_code.planner import RoutePlanner
 
 import math
 from matplotlib import cm
+from copy import deepcopy
+
 
 SAVE_PATH = None#os.environ.get('SAVE_PATH', None)
 
@@ -39,10 +41,10 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         
         self.stuck_detector = 0
         self.forced_move    = 0
-        self.safety_area    = []
+        self.dilation       = 10 # Dilation that was applied when collecting the data.
 
         self.input_buffer = {'rgb': deque(), 'rgb_left': deque(), 'rgb_right': deque(), 
-                            'rgb_rear': deque(), 'lidar': deque(), 'gps': deque(), 'thetas': deque()}
+                            'rgb_rear': deque(), 'lidar': deque(), 'gps': deque(), 'thetas': deque(), 'velocity': deque()}
 
         self.config = GlobalConfig()
         self.net = TransFuser(self.config, 'cuda')
@@ -134,7 +136,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
                     'id': 'speed'
                     }
                 ]
-
+    
     def tick(self, input_data):
         self.step += 1
 
@@ -184,7 +186,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
 
         tick_data = self.tick(input_data)
 
-        if self.step < self.config.seq_len:
+        if self.step < (self.config.seq_len * self.dilation):
             rgb = torch.from_numpy(scale_and_crop_image(Image.fromarray(tick_data['rgb']), crop=self.config.input_resolution)).unsqueeze(0)
             self.input_buffer['rgb'].append(rgb.to('cuda', dtype=torch.float32))
             
@@ -202,6 +204,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             self.input_buffer['lidar'].append(tick_data['lidar'])
             self.input_buffer['gps'].append(tick_data['gps'])
             self.input_buffer['thetas'].append(tick_data['compass'])
+            self.input_buffer['velocity'].append(torch.FloatTensor([tick_data['speed']]).to('cuda', dtype=torch.float32))
 
             control = carla.VehicleControl()
             control.steer = 0.0
@@ -210,7 +213,6 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             
             return control
 
-        gt_velocity = torch.FloatTensor([tick_data['speed']]).to('cuda', dtype=torch.float32)
         command = torch.FloatTensor([tick_data['next_command']]).to('cuda', dtype=torch.float32)
 
         tick_data['target_point'] = [torch.FloatTensor([tick_data['target_point'][0]]),
@@ -221,7 +223,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         rgb = torch.from_numpy(scale_and_crop_image(Image.fromarray(tick_data['rgb']), crop=self.config.input_resolution)).unsqueeze(0)
         self.input_buffer['rgb'].popleft()
         self.input_buffer['rgb'].append(rgb.to('cuda', dtype=torch.float32))
-        
+
         if not self.config.ignore_sides:
             rgb_left = torch.from_numpy(scale_and_crop_image(Image.fromarray(tick_data['rgb_left']), crop=self.config.input_resolution)).unsqueeze(0)
             self.input_buffer['rgb_left'].popleft()
@@ -242,45 +244,77 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         self.input_buffer['gps'].append(tick_data['gps'])
         self.input_buffer['thetas'].popleft()
         self.input_buffer['thetas'].append(tick_data['compass'])
+        self.input_buffer['velocity'].popleft()
+        self.input_buffer['velocity'].append(torch.FloatTensor([tick_data['speed']]).to('cuda', dtype=torch.float32))
 
         # transform the lidar point clouds to local coordinate frame
         ego_theta = self.input_buffer['thetas'][-1]
         ego_x, ego_y = self.input_buffer['gps'][-1]
 
-        #Only predict every second step because we only get a LiDAR every second frame.
-        if(self.step  % 2 == 0 or self.step <= 4):
-            for i, lidar_point_cloud in enumerate(self.input_buffer['lidar']):
+        # Check safety area
+        # Defines a cube in front of the car that acts as safety area.
+        lidar_saftey = deepcopy(tick_data['lidar'])
+        lidar_saftey[:, 1] *= -1  # inverts x, y
+        lidar_saftey = lidar_saftey[lidar_saftey[..., 2] > -2.0]
+        lidar_saftey = lidar_saftey[lidar_saftey[..., 2] < -0.98]
+        lidar_saftey = lidar_saftey[lidar_saftey[..., 1] > -3.0]
+        lidar_saftey = lidar_saftey[lidar_saftey[..., 1] <  0.0]
+        lidar_saftey = lidar_saftey[lidar_saftey[..., 0] > -1.066]
+        lidar_saftey = lidar_saftey[lidar_saftey[..., 0] <  1.066]
+
+        #Only predict every second step because we only get a front LiDAR every second frame.
+        if(self.step  % 2 == 0):
+            indices = []
+            # The past 3 frames dilated by 10
+            for i in range(self.config.seq_len):
+                indices.append(i * self.dilation + (self.dilation - 1))
+            
+            self.lidar_processed = []
+            for i, lidar_point_cloud_reference in enumerate(self.input_buffer['lidar']):
+                # We only process the lidars that we actually need. Reduces the time of this for loop from 100ms to 15ms with seq_len = 3
+                if(not (i in indices)):
+                    self.lidar_processed.append([])
+                    continue
+                # We will flip the y axis of the data. To avoid doing it multiple times on the same data we need to copy it.
+                lidar_point_cloud = deepcopy(lidar_point_cloud_reference) 
+                
                 curr_theta = self.input_buffer['thetas'][i]
                 curr_x, curr_y = self.input_buffer['gps'][i]
-                lidar_point_cloud[:,1] *= -1 # inverts x, y
                 
-                #Check safety area
-                # Defines a cube of 1m length in front of the car.
-                correct_height         = np.logical_and((lidar_point_cloud[..., 2] > -2.0),   (lidar_point_cloud[..., 2] < -0.98))
-                correct_length         = np.logical_and((lidar_point_cloud[..., 1] > -2.75),  (lidar_point_cloud[..., 1] < 0.0))
-                correct_width          = np.logical_and((lidar_point_cloud[..., 0] > -1.066), (lidar_point_cloud[..., 0] < 1.066))
-                correct_height_length  = np.logical_and(correct_height,                        correct_length)
-                correct_total_position = np.logical_and(correct_height_length,                 correct_width)
-                self.safety_area       = lidar_point_cloud[correct_total_position]
+                lidar_point_cloud[:, 1] *= -1  # inverts x, y
+                
+                # Voxelize to BEV for NN to process
+                
+                lidar_transformed = transform_2d_points(lidar_point_cloud, np.pi / 2 - curr_theta, -curr_x, -curr_y, #500mu
+                                                        np.pi / 2 - ego_theta, -ego_x, -ego_y)
                 
                 
-                #Voxelize to BEV for NN to process
-                lidar_transformed = transform_2d_points(lidar_point_cloud,
-                        np.pi/2-curr_theta, -curr_x, -curr_y, np.pi/2-ego_theta, -ego_x, -ego_y)
-                lidar_transformed = torch.from_numpy(lidar_to_histogram_features(lidar_transformed, crop=self.config.input_resolution)).unsqueeze(0)
-                self.lidar_processed = list()
+                lidar_transformed = torch.from_numpy(
+                    lidar_to_histogram_features(lidar_transformed, crop=self.config.input_resolution)).unsqueeze(0) #3ms
+                
                 self.lidar_processed.append(lidar_transformed.to('cuda', dtype=torch.float32))
-
-
-            self.pred_wp = self.net(self.input_buffer['rgb'] + self.input_buffer['rgb_left'] + \
-                               self.input_buffer['rgb_right']+self.input_buffer['rgb_rear'], \
-                               self.lidar_processed, target_point, gt_velocity)
+             
+            input_images = [self.input_buffer['rgb'][i] for i in indices]
+            if not self.config.ignore_sides:
+                input_images += [self.input_buffer['rgb_left'][i] for i in indices]
+                input_images += [self.input_buffer['rgb_right'][i] for i in indices]
+            if not self.config.ignore_rear:
+                input_images += [self.input_buffer['rgb_rear'][i] for i in indices]
+            input_lidars = [self.lidar_processed[i] for i in indices]
+            input_velocities = [self.input_buffer['velocity'][i] for i in indices]
+            #for idx, elem in enumerate(input_lidars):
+            #    Image.fromarray(cm.gist_earth(elem.cpu().numpy()[0, 1], bytes=True)).save(self.save_path / 'lidar_1' / (('%04d_' % self.step) + ('%04d.png' % idx)))
+            
+            
+            self.pred_wp = self.net(input_images, input_lidars, target_point, input_velocities)
 
         is_stuck = False
         if(self.stuck_detector > 900 and self.forced_move < 30): # 900 = 45 seconds * 20 Frames per second, we move for 1.5 second = 30 frames to unblock
             print("Detected agent being stuck. Move for frame: ", self.forced_move)
             is_stuck = True
             self.forced_move += 1
+            
+        gt_velocity = self.input_buffer['velocity'][-1]
         steer, throttle, brake, metadata = self.net.control_pid(self.pred_wp, gt_velocity, is_stuck)
         self.pid_metadata = metadata
 
@@ -295,7 +329,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
 
         # Safety controller. Stops the car in case something is directly in front of it.
         control = carla.VehicleControl()
-        emergency_stop = (len(self.safety_area) > 0) #Checks if the List is empty
+        emergency_stop = (len(lidar_saftey) > 0) #Checks if the List is empty
         if(emergency_stop):
             print("Detected object directly in front of the vehicle. Stopping. Step:", self.step)
             control.steer = float(steer)
@@ -307,13 +341,13 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             control.throttle = float(throttle)
             control.brake = float(brake)
 
-        if SAVE_PATH is not None and self.step % 10 == 0:
-            self.save(tick_data)
+       # if SAVE_PATH is not None and self.step % self.dilation == 0:
+        #    self.save(tick_data)
 
         return control
 
     def save(self, tick_data):
-        frame = self.step // 10
+        frame = self.step // self.dilation
 
         Image.fromarray(tick_data['rgb']).save(self.save_path / 'rgb' / ('%04d.png' % frame))
 
