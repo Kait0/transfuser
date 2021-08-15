@@ -302,9 +302,12 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
                 input_images += [self.input_buffer['rgb_rear'][i] for i in indices]
             input_lidars = [self.lidar_processed[i] for i in indices]
             input_velocities = [self.input_buffer['velocity'][i] for i in indices]
+            #Debug input data.
             #for idx, elem in enumerate(input_lidars):
             #    Image.fromarray(cm.gist_earth(elem.cpu().numpy()[0, 1], bytes=True)).save(self.save_path / 'lidar_1' / (('%04d_' % self.step) + ('%04d.png' % idx)))
-            
+            #for idx, elem in enumerate(input_images):
+            #    elem = np.transpose(elem.cpu().numpy()[0], (1,2,0)).astype(np.uint8)
+            #    Image.fromarray(elem).save(self.save_path / 'rgb' / (('%04d_' % self.step) + ('%04d.png' % idx)))
             
             self.pred_wp = self.net(input_images, input_lidars, target_point, input_velocities)
 
