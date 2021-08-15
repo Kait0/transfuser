@@ -201,7 +201,7 @@ class GPT(nn.Module):
         self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * 1 * vert_anchors * horz_anchors, n_embd))#seq_len
         
         # velocity embedding
-        self.vel_emb = nn.Linear(self.seq_len, n_embd) #TODO test seq ke
+        self.vel_emb = nn.Linear(self.config.seq_len, n_embd) #TODO test seq ke
         self.drop = nn.Dropout(embd_pdrop)
 
         # transformer
