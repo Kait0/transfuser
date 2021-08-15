@@ -42,6 +42,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         self.stuck_detector = 0
         self.forced_move    = 0
         self.dilation       = 10 # Dilation that was applied when collecting the data.
+        self.lidar_saftey   = []
 
         self.input_buffer = {'rgb': deque(), 'rgb_left': deque(), 'rgb_right': deque(), 
                             'rgb_rear': deque(), 'lidar': deque(), 'gps': deque(), 'thetas': deque(), 'velocity': deque()}
@@ -251,19 +252,21 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         ego_theta = self.input_buffer['thetas'][-1]
         ego_x, ego_y = self.input_buffer['gps'][-1]
 
-        # Check safety area
-        # Defines a cube in front of the car that acts as safety area.
-        lidar_saftey = deepcopy(tick_data['lidar'])
-        lidar_saftey[:, 1] *= -1  # inverts x, y
-        lidar_saftey = lidar_saftey[lidar_saftey[..., 2] > -2.0]
-        lidar_saftey = lidar_saftey[lidar_saftey[..., 2] < -0.98]
-        lidar_saftey = lidar_saftey[lidar_saftey[..., 1] > -3.0]
-        lidar_saftey = lidar_saftey[lidar_saftey[..., 1] <  0.0]
-        lidar_saftey = lidar_saftey[lidar_saftey[..., 0] > -1.066]
-        lidar_saftey = lidar_saftey[lidar_saftey[..., 0] <  1.066]
+       
 
         #Only predict every second step because we only get a front LiDAR every second frame.
         if(self.step  % 2 == 0):
+            # Check safety area
+            # Defines a cube in front of the car that acts as safety area.
+            lidar_saftey = deepcopy(tick_data['lidar'])
+            lidar_saftey[:, 1] *= -1  # inverts x, y
+            lidar_saftey      = lidar_saftey[lidar_saftey[..., 2] > -2.0]
+            lidar_saftey      = lidar_saftey[lidar_saftey[..., 2] < -1.05]  # 0.98
+            lidar_saftey      = lidar_saftey[lidar_saftey[..., 1] > -3.0]
+            lidar_saftey      = lidar_saftey[lidar_saftey[..., 1] < 0.0]
+            lidar_saftey      = lidar_saftey[lidar_saftey[..., 0] > -1.066]
+            self.lidar_saftey = lidar_saftey[lidar_saftey[..., 0] < 1.066]
+            
             indices = []
             # The past 3 frames dilated by 10
             for i in range(self.config.seq_len):
@@ -332,7 +335,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
 
         # Safety controller. Stops the car in case something is directly in front of it.
         control = carla.VehicleControl()
-        emergency_stop = (len(lidar_saftey) > 0) #Checks if the List is empty
+        emergency_stop = (len(self.lidar_saftey) > 0) #Checks if the List is empty
         if(emergency_stop):
             print("Detected object directly in front of the vehicle. Stopping. Step:", self.step)
             control.steer = float(steer)
