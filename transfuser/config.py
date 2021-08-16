@@ -26,6 +26,8 @@ class GlobalConfig:
     crop = 256 # image pre-processing
 
     lr = 1e-4 # learning rate
+    ls_seg   = 1.0
+    ls_depth = 10.0
 
     # Conv Encoder
     vert_anchors = 8

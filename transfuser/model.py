@@ -7,6 +7,8 @@ from torch import nn
 import torch.nn.functional as F
 from torchvision import models
 
+from decoder import SegDecoder, DepthDecoder
+
 
 class ImageCNN(nn.Module):
     """ 
@@ -372,6 +374,8 @@ class Encoder(nn.Module):
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
 
+        image_features_grid = image_features  # For auxilliary information
+
         image_features = self.image_encoder.features.avgpool(image_features)
         image_features = torch.flatten(image_features, 1)
         image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1)
@@ -382,7 +386,7 @@ class Encoder(nn.Module):
         fused_features = torch.cat([image_features, lidar_features], dim=1)
         fused_features = torch.sum(fused_features, dim=1)
 
-        return fused_features
+        return fused_features, image_features_grid
 
 
 class PIDController(object):
@@ -426,6 +430,9 @@ class TransFuser(nn.Module):
 
         self.encoder = Encoder(config).to(self.device)
 
+        self.seg_decoder   = SegDecoder(self.config,   512).to(self.device)
+        self.depth_decoder = DepthDecoder(self.config, 512).to(self.device)
+
         self.join = nn.Sequential(
                             nn.Linear(512, 256),
                             nn.ReLU(inplace=True),
@@ -446,8 +453,11 @@ class TransFuser(nn.Module):
             target_point (tensor): goal location registered to ego-frame
             velocity (tensor): input velocity from speedometer
         '''
-        fused_features = self.encoder(image_list, lidar_list, velocity)
+        fused_features, image_features_grid = self.encoder(image_list, lidar_list, velocity)
         z = self.join(fused_features)
+
+        semantic_segmentation = self.seg_decoder(image_features_grid)
+        depth_prediction      = self.depth_decoder(image_features_grid)
 
         output_wp = list()
 
@@ -465,7 +475,7 @@ class TransFuser(nn.Module):
 
         pred_wp = torch.stack(output_wp, dim=1)
 
-        return pred_wp
+        return pred_wp, semantic_segmentation, depth_prediction
 
     def control_pid(self, waypoints, velocity, is_stuck):
         ''' 
