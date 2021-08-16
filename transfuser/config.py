@@ -3,7 +3,7 @@ import os
 class GlobalConfig:
     """ base architecture configurations """
 	# Data
-    seq_len = 3 # input timesteps
+    seq_len = 1 # input timesteps
     pred_len = 4 # future waypoints predicted
 
     ignore_sides = True # don't consider side cameras
@@ -14,6 +14,47 @@ class GlobalConfig:
 
     scale = 1 # image pre-processing
     crop = 256 # image pre-processing
+
+    num_class = 7
+    classes = {
+        0: [0, 0, 0],  # unlabeled
+        1: [0, 0, 255],  # vehicle
+        2: [128, 64, 128],  # road
+        3: [255, 0, 0],  # red light
+        4: [0, 255, 0],  # pedestrian
+        5: [157, 234, 50],  # road line
+        6: [255, 255, 255],  # sidewalk
+    }
+    converter = [
+        0,  # unlabeled
+        0,  # building
+        0,  # fence
+        0,  # other
+        4,  # pedestrian
+        0,  # pole
+        5,  # road line
+        2,  # road
+        6,  # sidewalk
+        0,  # vegetation
+        1,  # vehicle
+        0,  # wall
+        0,  # traffic sign
+        0,  # sky
+        0,  # ground
+        0,  # bridge
+        0,  # rail track
+        0,  # guard rail
+        0,  # traffic light
+        0,  # static
+        0,  # dynamic
+        0,  # water
+        0,  # terrain
+        3,  # red light
+        3,  # yellow light
+        0,  # green light
+        0,  # stop sign
+        5,  # stop line marking
+    ]
 
     lr = 1e-4 # learning rate
     ls_seg   = 1.0

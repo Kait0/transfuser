@@ -31,7 +31,7 @@ class SegDecoder(nn.Module):
                     )
 
     def forward(self, x):
-        x = sum(x) #TODO check if we need to remove the sum
+        #x = sum(x)
         x = self.deconv1(x)
         x = F.interpolate(x, scale_factor=8, mode='bilinear')
         x = self.deconv2(x)
@@ -68,7 +68,7 @@ class DepthDecoder(nn.Module):
                     )
 
     def forward(self, x):
-        x = sum(x) #TODO check if we need to remove the sum
+        #x = sum(x)
         x = self.deconv1(x)
         x = F.interpolate(x, scale_factor=8, mode='bilinear')
         x = self.deconv2(x)

@@ -20,11 +20,21 @@ class CARLA_Data(Dataset):
         self.input_resolution = config.input_resolution
         self.scale = config.scale
 
+        self.converter = np.uint8(config.converter)
+
         self.lidar = []
         self.front = []
         self.left = []
         self.right = []
         self.rear = []
+        self.seg_front = []
+        self.seg_left = []
+        self.seg_right = []
+        self.seg_rear = []
+        self.depth_front = []
+        self.depth_left = []
+        self.depth_right = []
+        self.depth_rear = []
         self.x = []
         self.y = []
         self.x_command = []
@@ -42,9 +52,9 @@ class CARLA_Data(Dataset):
                 town = os.path.basename(os.path.normpath(sub_root))
                 print("Town: ", town, flush=True)
                 writefolder = '/mnt/qb/geiger/bjaeger25' #Workaround since I don't have write permissions in the dataset folder
-                preload_file = os.path.join(writefolder, str(town) + '_rg_lidar_diag_pl_'+str(self.seq_len)+'_'+str(self.pred_len)+'.npy')
+                preload_file = os.path.join(writefolder, str(town) + '_rg_lidar_aux_diag_pl_'+str(self.seq_len)+'_'+str(self.pred_len)+'.npy')
             else:
-                preload_file = os.path.join(sub_root, 'dp_lidar360_front_angle_'+str(config.seq_len)+'_'+str(config.pred_len)+'.npy')
+                preload_file = os.path.join(sub_root, '_rg_lidar_aux_diag_pl_'+str(config.seq_len)+'_'+str(config.pred_len)+'.npy')
             
             print("Preload_file: ", preload_file, flush=True)
 
@@ -54,6 +64,14 @@ class CARLA_Data(Dataset):
                 preload_left = []
                 preload_right = []
                 preload_rear = []
+                preload_seg_front = []
+                preload_seg_left = []
+                preload_seg_right = []
+                preload_seg_rear = []
+                preload_depth_front = []
+                preload_depth_left = []
+                preload_depth_right = []
+                preload_depth_rear = []
                 preload_lidar = []
                 preload_x = []
                 preload_y = []
@@ -78,15 +96,23 @@ class CARLA_Data(Dataset):
                     num_seq = (len(os.listdir(route_dir+"/rgb_front/"))-self.pred_len-2)//self.seq_len
                     
                     for seq in range(num_seq):
-                        fronts     = []
-                        lefts      = []
-                        rights     = []
-                        rears      = []
-                        lidars     = []
-                        xs         = []
-                        ys         = []
-                        thetas     = []
-                        velocities = []
+                        fronts       = []
+                        lefts        = []
+                        rights       = []
+                        rears        = []
+                        seg_fronts   = []
+                        seg_lefts    = []
+                        seg_rights   = []
+                        seg_rears    = []
+                        depth_fronts = []
+                        depth_lefts  = []
+                        depth_rights = []
+                        depth_rears  = []
+                        lidars       = []
+                        xs           = []
+                        ys           = []
+                        thetas       = []
+                        velocities   = []
 
                         # read files sequentially (past and current frames)
                         for i in range(self.seq_len):
@@ -96,6 +122,14 @@ class CARLA_Data(Dataset):
                             lefts.append(route_dir+"/rgb_left/"+filename)
                             rights.append(route_dir+"/rgb_right/"+filename)
                             rears.append(route_dir+"/rgb_rear/"+filename)
+                            seg_fronts.append(route_dir + "/seg_front/" + filename)
+                            seg_lefts.append(route_dir + "/seg_left/" + filename)
+                            seg_rights.append(route_dir + "/seg_right/" + filename)
+                            seg_rears.append(route_dir + "/seg_rear/" + filename)
+                            depth_fronts.append(route_dir + "/depth_front/" + filename)
+                            depth_lefts.append(route_dir + "/depth_left/" + filename)
+                            depth_rights.append(route_dir + "/depth_right/" + filename)
+                            depth_rears.append(route_dir + "/depth_rear/" + filename)
 
                             # point cloud
                             lidars.append(route_dir + f"/lidar/{str(seq*self.seq_len+1+i).zfill(4)}.npy")
@@ -137,6 +171,14 @@ class CARLA_Data(Dataset):
                         preload_left.append(lefts)
                         preload_right.append(rights)
                         preload_rear.append(rears)
+                        preload_seg_front.append(seg_fronts)
+                        preload_seg_left.append(seg_lefts)
+                        preload_seg_right.append(seg_rights)
+                        preload_seg_rear.append(seg_rears)
+                        preload_depth_front.append(depth_fronts)
+                        preload_depth_left.append(depth_lefts)
+                        preload_depth_right.append(depth_rights)
+                        preload_depth_rear.append(depth_rears)
                         preload_lidar.append(lidars)
                         preload_x.append(xs)
                         preload_y.append(ys)
@@ -149,6 +191,14 @@ class CARLA_Data(Dataset):
                 preload_dict['left'] = preload_left
                 preload_dict['right'] = preload_right
                 preload_dict['rear'] = preload_rear
+                preload_dict['seg_front'] = preload_seg_front
+                preload_dict['seg_left'] = preload_seg_left
+                preload_dict['seg_right'] = preload_seg_right
+                preload_dict['seg_rear'] = preload_seg_rear
+                preload_dict['depth_front'] = preload_depth_front
+                preload_dict['depth_left'] = preload_depth_left
+                preload_dict['depth_right'] = preload_depth_right
+                preload_dict['depth_rear'] = preload_depth_rear
                 preload_dict['lidar'] = preload_lidar
                 preload_dict['x'] = preload_x
                 preload_dict['y'] = preload_y
@@ -168,6 +218,14 @@ class CARLA_Data(Dataset):
             self.left += preload_dict.item()['left']
             self.right += preload_dict.item()['right']
             self.rear += preload_dict.item()['rear']
+            self.seg_front += preload_dict.item()['seg_front']
+            self.seg_left += preload_dict.item()['seg_left']
+            self.seg_right += preload_dict.item()['seg_right']
+            self.seg_rear += preload_dict.item()['seg_rear']
+            self.depth_front += preload_dict.item()['depth_front']
+            self.depth_left += preload_dict.item()['depth_left']
+            self.depth_right += preload_dict.item()['depth_right']
+            self.depth_rear += preload_dict.item()['depth_rear']
             self.lidar += preload_dict.item()['lidar']
             self.x += preload_dict.item()['x']
             self.y += preload_dict.item()['y']
@@ -188,22 +246,38 @@ class CARLA_Data(Dataset):
     def __getitem__(self, index):
         """Returns the item at index idx. """
         data = dict()
-        data['fronts']   = []
-        data['lefts']    = []
-        data['rights']   = []
-        data['rears']    = []
-        data['lidars']   = []
-        data['velocity'] = []
+        data['fronts']       = []
+        data['lefts']        = []
+        data['rights']       = []
+        data['rears']        = []
+        data['seg_fronts']   = []
+        data['seg_lefts']    = []
+        data['seg_rights']   = []
+        data['seg_rears']    = []
+        data['depth_fronts'] = []
+        data['depth_lefts']  = []
+        data['depth_rights'] = []
+        data['depth_rears']  = []
+        data['lidars']       = []
+        data['velocity']     = []
 
-        seq_fronts   = self.front[index]
-        seq_lefts    = self.left[index]
-        seq_rights   = self.right[index]
-        seq_rears    = self.rear[index]
-        seq_lidars   = self.lidar[index]
-        seq_x        = self.x[index]
-        seq_y        = self.y[index]
-        seq_theta    = self.theta[index]
-        seq_velocity = self.velocity[index]
+        seq_fronts       = self.front[index]
+        seq_lefts        = self.left[index]
+        seq_rights       = self.right[index]
+        seq_rears        = self.rear[index]
+        seq_seg_fronts   = self.seg_front[index]
+        seq_seg_lefts    = self.seg_left[index]
+        seq_seg_rights   = self.seg_right[index]
+        seq_seg_rears    = self.seg_rear[index]
+        seq_depth_fronts = self.depth_front[index]
+        seq_depth_lefts  = self.depth_left[index]
+        seq_depth_rights = self.depth_right[index]
+        seq_depth_rears  = self.depth_rear[index]
+        seq_lidars       = self.lidar[index]
+        seq_x            = self.x[index]
+        seq_y            = self.y[index]
+        seq_theta        = self.theta[index]
+        seq_velocity     = self.velocity[index]
 
         full_lidar = []
         pos = []
@@ -219,6 +293,20 @@ class CARLA_Data(Dataset):
             if not self.ignore_rear:
                 data['rears'].append(torch.from_numpy(np.array(
                     scale_and_crop_image(Image.open(seq_rears[i]), scale=self.scale, crop=self.input_resolution))))
+            
+            data['seg_fronts'].append(torch.from_numpy(self.converter[scale_and_crop_seg(Image.open(seq_seg_fronts[i]), scale=self.scale, crop=self.input_resolution)]))
+            if not self.ignore_sides:
+                data['seg_lefts'].append(torch.from_numpy(self.converter[scale_and_crop_seg(Image.open(seq_seg_lefts[i]), scale=self.scale, crop=self.input_resolution)]))
+                data['seg_rights'].append(torch.from_numpy(self.converter[scale_and_crop_seg(Image.open(seq_seg_rights[i]), scale=self.scale, crop=self.input_resolution)]))
+            if not self.ignore_rear:
+                data['seg_rears'].append(torch.from_numpy(self.converter[scale_and_crop_seg(Image.open(seq_seg_rears[i]), scale=self.scale, crop=self.input_resolution)]))
+
+            data['depth_fronts'].append(torch.from_numpy(get_depth(scale_and_crop_image(Image.open(seq_depth_fronts[i]), scale=self.scale, crop=self.input_resolution))))
+            if not self.ignore_sides:
+                data['depth_lefts'].append(torch.from_numpy(get_depth(scale_and_crop_image(Image.open(seq_depth_lefts[i]), scale=self.scale, crop=self.input_resolution))))
+                data['depth_rights'].append(torch.from_numpy(get_depth(scale_and_crop_image(Image.open(seq_depth_rights[i]), scale=self.scale, crop=self.input_resolution))))
+            if not self.ignore_rear:
+                data['depth_rears'].append(torch.from_numpy(get_depth(scale_and_crop_image(Image.open(seq_depth_rears[i]), scale=self.scale, crop=self.input_resolution))))
             
             lidar_unprocessed = np.load(seq_lidars[i])[...,:3] # lidar: XYZI
             full_lidar.append(lidar_unprocessed)
@@ -276,6 +364,18 @@ class CARLA_Data(Dataset):
         
         return data
 
+def get_depth(data):
+    """
+    Computes the normalized depth
+    """
+    data = np.transpose(data, (1,2,0))
+    data = data.astype(np.float32)
+
+    normalized = np.dot(data, [65536.0, 256.0, 1.0]) 
+    normalized /=  (256 * 256 * 256 - 1)
+    # in_meters = 1000 * normalized
+
+    return normalized
 
 def lidar_to_histogram_features(lidar, crop=256):
     """
@@ -301,6 +401,30 @@ def lidar_to_histogram_features(lidar, crop=256):
     features = np.stack([below_features, above_features], axis=-1)
     features = np.transpose(features, (2, 0, 1)).astype(np.float32)
     return features
+
+
+def scale_and_crop_seg(image, scale=1, crop=256):
+    """
+    Scale and crop a seg image, returning a channels-first numpy array.
+    """
+    # image = Image.open(filename)
+    (width, height) = (int(image.width / scale), int(image.height / scale))
+    if scale != 1:
+        im_resized = image.resize((width, height), resample=Image.NEAREST)
+    else:
+        im_resized = image
+
+    im_resized = np.asarray(im_resized)
+    start_y = height // 2 - crop // 2
+    start_x = width // 2 - crop // 2
+
+    cropped_image = im_resized[start_y:start_y + crop, start_x:start_x + crop]
+
+    if len(cropped_image.shape) == 2:  # topdown semantic image
+        cropped_image = cropped_image.reshape((crop, crop, 1))
+
+    cropped_image = np.transpose(cropped_image, (2, 0, 1))
+    return cropped_image
 
 
 def scale_and_crop_image(image, scale=1, crop=256):

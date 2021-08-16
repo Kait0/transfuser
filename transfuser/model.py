@@ -193,16 +193,16 @@ class GPT(nn.Module):
                     embd_pdrop, attn_pdrop, resid_pdrop, config):
         super().__init__()
         self.n_embd = n_embd
-        self.seq_len = 1#seq_len #Note we do temporal reasoning by stacking frames currently
+        self.seq_len = seq_len #Note we do temporal reasoning by stacking frames currently
         self.vert_anchors = vert_anchors
         self.horz_anchors = horz_anchors
         self.config = config
 
         # positional embedding parameter (learnable), image + lidar
-        self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * 1 * vert_anchors * horz_anchors, n_embd))#seq_len
+        self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * seq_len * vert_anchors * horz_anchors, n_embd))
         
         # velocity embedding
-        self.vel_emb = nn.Linear(self.config.seq_len, n_embd) #TODO test seq ke
+        self.vel_emb = nn.Linear(self.config.seq_len, n_embd)
         self.drop = nn.Dropout(embd_pdrop)
 
         # transformer
@@ -213,7 +213,7 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(n_embd)
 
-        self.block_size = 1#seq_len
+        self.block_size = seq_len
         self.apply(self._init_weights)
 
     def get_block_size(self):
@@ -308,15 +308,8 @@ class Encoder(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((self.config.vert_anchors, self.config.horz_anchors))
         
         self.image_encoder = ImageCNN(512, normalize=True)
-
-        #to use pretraining we need to repeat our kernel weights 3 times and divide the output by 3
-        self.image_encoder.features.conv1.weight = nn.Parameter(self.image_encoder.features.conv1.weight.repeat_interleave(self.config.seq_len, dim=1))
-        
         self.lidar_encoder = LidarEncoder(num_classes=512, in_channels=2)
-        self.lidar_encoder._model.conv1.weight = nn.Parameter(self.lidar_encoder._model.conv1.weight.repeat_interleave(self.config.seq_len, dim=1))
-
         
-
         self.transformer1 = GPT(n_embd=64,
                             n_head=config.n_head, 
                             block_exp=config.block_exp, 
@@ -379,16 +372,14 @@ class Encoder(nn.Module):
         lidar_channel = lidar_list[0].shape[1]
         self.config.n_views = len(image_list) // self.config.seq_len
 
-        image_tensor = torch.cat(image_list, dim=1).view(bz * self.config.n_views, img_channel * self.config.seq_len, h, w)
-        lidar_tensor = torch.cat(lidar_list, dim=1)#.view(bz, lidar_channel * self.config.seq_len, h, w)
+        image_tensor = torch.stack(image_list, dim=1).view(bz * self.config.n_views * self.config.seq_len, img_channel, h, w)
+        lidar_tensor = torch.stack(lidar_list, dim=1).view(bz * self.config.seq_len, lidar_channel, h, w)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
-        image_features = image_features / self.config.seq_len # For stacked temporal reasoning
         image_features = self.image_encoder.features.bn1(image_features)
         image_features = self.image_encoder.features.relu(image_features)
         image_features = self.image_encoder.features.maxpool(image_features)
         lidar_features = self.lidar_encoder._model.conv1(lidar_tensor)
-        lidar_features = lidar_features / self.config.seq_len # For stacked temporal reasoning
         lidar_features = self.lidar_encoder._model.bn1(lidar_features)
         lidar_features = self.lidar_encoder._model.relu(lidar_features)
         lidar_features = self.lidar_encoder._model.maxpool(lidar_features)
@@ -439,11 +430,11 @@ class Encoder(nn.Module):
 
         image_features = self.image_encoder.features.avgpool(image_features)
         image_features = torch.flatten(image_features, 1)
-        image_features = image_features.view(bz, self.config.n_views * 1, -1) #self.config.seq_len
+        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1)
         lidar_features = self.lidar_encoder._model.avgpool(lidar_features)
         lidar_features = torch.flatten(lidar_features, 1)
-        lidar_features = lidar_features.view(bz, 1, -1) #elf.config.seq_len
-
+        lidar_features = lidar_features.view(bz, self.config.seq_len, -1)
+        
         fused_features = torch.cat([image_features, lidar_features], dim=1)
         fused_features = torch.sum(fused_features, dim=1)
 

@@ -26,6 +26,7 @@ parser.add_argument('--val_every', type=int, default=5, help='Validation frequen
 parser.add_argument('--batch_size', type=int, default=24, help='Batch size')
 parser.add_argument('--logdir', type=str, default='log', help='Directory to log data to.')
 parser.add_argument('--machine', type=int, default=0, help='Machine this code is executed on. Used for setting paths') #0 ML_cloud 1 LocalPC 2 Laptop
+parser.add_argument('--schedule', type=int, default=0, help='Whether to train with a learning rate schedule. 1 = True') #0 ML_cloud 1 LocalPC 2 Laptop
 
 args = parser.parse_args()
 args.logdir = os.path.join(args.logdir, args.id)
@@ -51,8 +52,11 @@ class Engine(object):
         self.bestval = 1e10
 
     def train(self):
-        loss_epoch = 0.
-        num_batches = 0
+        loss_epoch       = 0.0
+        loss_wp_epoch    = 0.0
+        loss_seg_epoch   = 0.0
+        loss_depth_epoch = 0.0
+        num_batches      = 0
         model.train()
 
         # Train loop
@@ -95,13 +99,24 @@ class Engine(object):
             # target point
             target_point = torch.stack(data['target_point'], dim=1).to(args.device, dtype=torch.float32)
             
-            pred_wp = model(fronts+lefts+rights+rears, lidars, target_point, velocities)
+            pred_wp, pred_seg, pred_depth = model(fronts+lefts+rights+rears, lidars, target_point, velocities)
             
             gt_waypoints = [torch.stack(data['waypoints'][i], dim=1).to(args.device, dtype=torch.float32) for i in range(config.seq_len, len(data['waypoints']))]
             gt_waypoints = torch.stack(gt_waypoints, dim=1).to(args.device, dtype=torch.float32)
-            loss = F.l1_loss(pred_wp, gt_waypoints, reduction='none').mean()
+            
+            gt_seg   = data['seg_fronts'][-1].squeeze(1).to(args.device, dtype=torch.long)
+            gt_depth = data['depth_fronts'][-1].to(         args.device, dtype=torch.float32)
+            
+            loss_wp    =                   F.l1_loss(      pred_wp,    gt_waypoints, reduction='none').mean()
+            loss_seg   = config.ls_seg   * F.cross_entropy(pred_seg,   gt_seg).mean()
+            loss_depth = config.ls_depth * F.l1_loss(      pred_depth, gt_depth).mean()
+            loss       = loss_wp + loss_seg + loss_depth
+
             loss.backward()
-            loss_epoch += float(loss.item())
+            loss_wp_epoch    += float(loss_wp.item())
+            loss_seg_epoch   += float(loss_seg.item())
+            loss_depth_epoch += float(loss_depth.item())
+            loss_epoch       += float(loss.item())
 
             num_batches += 1
             optimizer.step()
@@ -109,18 +124,27 @@ class Engine(object):
             self.cur_iter += 1
         
         
-        loss_epoch = loss_epoch / num_batches
-        writer.add_scalar('train_loss', loss_epoch, self.cur_epoch)
+        loss_wp_epoch    = loss_wp_epoch    / num_batches
+        loss_seg_epoch   = loss_seg_epoch   / num_batches
+        loss_depth_epoch = loss_depth_epoch / num_batches
+        loss_epoch       = loss_epoch       / num_batches
+        writer.add_scalar('loss_wp',    loss_wp_epoch,    self.cur_epoch)
+        writer.add_scalar('loss_seg',   loss_seg_epoch,   self.cur_epoch)
+        writer.add_scalar('loss_depth', loss_depth_epoch, self.cur_epoch)
+        writer.add_scalar('train_loss', loss_epoch,       self.cur_epoch)
         self.train_loss.append(loss_epoch)
-        tqdm.write(f'Training: Epoch {self.cur_epoch:03d}' + f' Wp: {loss_epoch:3.3f}')
+        tqdm.write(f'Training: Epoch {self.cur_epoch:03d}' + f' Loss: {loss_epoch:3.3f}' + f' Wp: {loss_wp_epoch:3.3f}' + f' Seg: {loss_seg_epoch:3.3f}' + f' Depth: {loss_depth_epoch:3.3f}')
         self.cur_epoch += 1
 
     def validate(self):
         model.eval()
 
-        with torch.no_grad():	
-            num_batches = 0
-            wp_epoch = 0.
+        with torch.no_grad():
+            loss_epoch       = 0.0
+            loss_wp_epoch    = 0.0
+            loss_seg_epoch   = 0.0
+            loss_depth_epoch = 0.0
+            num_batches      = 0.0
 
             # Validation loop
             for batch_num, data in enumerate(tqdm(dataloader_val), 0):
@@ -158,20 +182,39 @@ class Engine(object):
                 # target point
                 target_point = torch.stack(data['target_point'], dim=1).to(args.device, dtype=torch.float32)
 
-                pred_wp = model(fronts+lefts+rights+rears, lidars, target_point, velocities)
+                pred_wp, pred_seg, pred_depth = model(fronts+lefts+rights+rears, lidars, target_point, velocities)
 
                 gt_waypoints = [torch.stack(data['waypoints'][i], dim=1).to(args.device, dtype=torch.float32) for i in range(config.seq_len, len(data['waypoints']))]
                 gt_waypoints = torch.stack(gt_waypoints, dim=1).to(args.device, dtype=torch.float32)
-                wp_epoch += float(F.l1_loss(pred_wp, gt_waypoints, reduction='none').mean())
 
-                num_batches += 1
+                gt_seg   = data['seg_fronts'][-1].squeeze(1).to(args.device, dtype=torch.long)
+                gt_depth = data['depth_fronts'][-1].to(args.device, dtype=torch.float32)
+                
+                loss_wp    =                   F.l1_loss(      pred_wp,    gt_waypoints, reduction='none').mean()
+                loss_seg   = config.ls_seg   * F.cross_entropy(pred_seg,   gt_seg).mean()
+                loss_depth = config.ls_depth * F.l1_loss(      pred_depth, gt_depth).mean()
+                loss       = loss_wp +  loss_seg +  loss_depth
+    
+                loss_wp_epoch    += float(loss_wp.item())
+                loss_seg_epoch   += float(loss_seg.item())
+                loss_depth_epoch += float(loss_depth.item())
+                loss_epoch       += float(loss.item())
+                
+                num_batches += 1.0
                     
-            wp_loss = wp_epoch / float(num_batches)
-            tqdm.write(f'Epoch {self.cur_epoch:03d}, Batch {batch_num:03d}:' + f' Wp: {wp_loss:3.3f}')
+            loss_wp_epoch    = loss_wp_epoch    / num_batches
+            loss_seg_epoch   = loss_seg_epoch   / num_batches
+            loss_depth_epoch = loss_depth_epoch / num_batches
+            loss_epoch       = loss_epoch       / num_batches
 
-            writer.add_scalar('val_loss', wp_loss, self.cur_epoch)
+            writer.add_scalar('val_loss_wp',    loss_wp_epoch,    self.cur_epoch)
+            writer.add_scalar('val_loss_seg',   loss_seg_epoch,   self.cur_epoch)
+            writer.add_scalar('val_loss_depth', loss_depth_epoch, self.cur_epoch)
+            writer.add_scalar('val_loss',       loss_epoch,       self.cur_epoch)
             
-            self.val_loss.append(wp_loss)
+            tqdm.write(f'Validation: Epoch {self.cur_epoch:03d}' + f' Loss: {loss_epoch:3.3f}' + f' Wp: {loss_wp_epoch:3.3f}' + f' Seg: {loss_seg_epoch:3.3f}' + f' Depth: {loss_depth_epoch:3.3f}')
+            
+            self.val_loss.append(loss_wp_epoch) # For choosing the best model only the Wp loss is relevant.
 
     def save(self):
 
@@ -265,7 +308,7 @@ with open(os.path.join(args.logdir, 'args.txt'), 'w') as f:
 
 once = False #In case we restart the training from a checkpoint, we need to readjust the learning rate
 for epoch in range(trainer.cur_epoch, args.epochs):
-    if (epoch >= 20 and once == False):
+    if ((epoch >= 30) and (once == False) and (args.schedule == 1)):
         once = True
         new_lr = args.lr * 0.1
         print("Reduce learning rate by factor 10 to:", new_lr)

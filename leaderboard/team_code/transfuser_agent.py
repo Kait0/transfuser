@@ -304,8 +304,8 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             if not self.config.ignore_rear:
                 input_images += [self.input_buffer['rgb_rear'][i] for i in indices]
             input_lidars = [self.lidar_processed[i] for i in indices]
-            #input_velocities = [self.input_buffer['velocity'][i] for i in indices] # Used when we use seq_len velocity values
-            input_velocities = self.input_buffer['velocity'][indices[-1]] #Used when we only use 1 velocity value
+            input_velocities = [self.input_buffer['velocity'][i] for i in indices] # Used when we use seq_len velocity values
+            #input_velocities = self.input_buffer['velocity'][indices[-1]] #Used when we only use 1 velocity value
             
             #Debug input data.
             #for idx, elem in enumerate(input_lidars):
@@ -314,7 +314,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             #    elem = np.transpose(elem.cpu().numpy()[0], (1,2,0)).astype(np.uint8)
             #    Image.fromarray(elem).save(self.save_path / 'rgb' / (('%04d_' % self.step) + ('%04d.png' % idx)))
             
-            self.pred_wp = self.net(input_images, input_lidars, target_point, input_velocities)
+            self.pred_wp, _, _ = self.net(input_images, input_lidars, target_point, input_velocities)
 
         is_stuck = False
         if(self.stuck_detector > 900 and self.forced_move < 30): # 900 = 45 seconds * 20 Frames per second, we move for 1.5 second = 30 frames to unblock
