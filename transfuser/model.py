@@ -8,7 +8,48 @@ import torch.nn.functional as F
 from torchvision import models
 
 from decoder import SegDecoder, DepthDecoder
+from resnet import *
 
+
+class ImageCNN2(nn.Module):
+    """ Encoder network for image input list.
+    Args:
+        c_dim (int): output dimension of the latent embedding
+        normalize (bool): whether the input images should be normalized
+        use_linear (bool): whether a final linear layer should be used
+    """
+
+    def __init__(self, c_dim, normalize=True, use_linear=False, **kwargs):
+        super().__init__()
+        self.normalize = normalize
+        self.use_linear = use_linear
+        self.model_type = kwargs.get('model_type')
+
+        if self.model_type == 'resnet18':
+            self.features = resnet18(pretrained=True)
+            self.features.fc = nn.Sequential()
+
+        elif self.model_type == 'resnet34':
+            self.features = resnet34(pretrained=True)
+            self.features.fc = nn.Sequential()
+
+        if use_linear:
+            self.fc = nn.Linear(512, c_dim)
+        elif c_dim == 512:
+            self.fc = nn.Sequential()
+        else:
+            raise ValueError('c_dim must be 512 if use_linear is False')
+
+    def forward(self, inputs):
+        c = 0
+        c_inter = 0
+        for x in inputs:
+            if self.normalize:
+                x = normalize_imagenet(x)
+            net, inter = self.features(x)
+            c += self.fc(net)
+            c_inter += inter
+        return c, c_inter
 
 class ImageCNN(nn.Module):
     """ 
@@ -38,11 +79,22 @@ def normalize_imagenet(x):
         x (tensor): input images
     """
     x = x.clone()
-    x[:, 0] = (x[:, 0] - 0.485) / 0.229
-    x[:, 1] = (x[:, 1] - 0.456) / 0.224
-    x[:, 2] = (x[:, 2] - 0.406) / 0.225
+    x[:, 0] = ((x[:, 0] / 255.0) - 0.485) / 0.229
+    x[:, 1] = ((x[:, 1] / 255.0) - 0.456) / 0.224
+    x[:, 2] = ((x[:, 2] / 255.0) - 0.406) / 0.225
     return x
 
+#TODO look into R2-1D models.video.r2plus1d_18(
+def normalize_kinetics(x): #TODO test and check for 4D transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    """ Normalize input images according to Kinetics-400 standards. 
+        Args:
+            x (tensor): input images
+    """
+    x = x.clone()
+    x[:, 0] = ((x[:, 0] / 255.0) - 0.43216)  / 0.22803
+    x[:, 1] = ((x[:, 1] / 255.0) - 0.394666) / 0.22145
+    x[:, 2] = ((x[:, 2] / 255.0) - 0.37645)  / 0.216989
+    return x
 
 class LidarEncoder(nn.Module):
     """
@@ -141,16 +193,16 @@ class GPT(nn.Module):
                     embd_pdrop, attn_pdrop, resid_pdrop, config):
         super().__init__()
         self.n_embd = n_embd
-        self.seq_len = seq_len
+        self.seq_len = 1#seq_len #Note we do temporal reasoning by stacking frames currently
         self.vert_anchors = vert_anchors
         self.horz_anchors = horz_anchors
         self.config = config
 
         # positional embedding parameter (learnable), image + lidar
-        self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * seq_len * vert_anchors * horz_anchors, n_embd))
+        self.pos_emb = nn.Parameter(torch.zeros(1, (self.config.n_views + 1) * 1 * vert_anchors * horz_anchors, n_embd))#seq_len
         
         # velocity embedding
-        self.vel_emb = nn.Linear(1, n_embd)
+        self.vel_emb = nn.Linear(self.config.seq_len, n_embd) #TODO test seq ke
         self.drop = nn.Dropout(embd_pdrop)
 
         # transformer
@@ -161,7 +213,7 @@ class GPT(nn.Module):
         # decoder head
         self.ln_f = nn.LayerNorm(n_embd)
 
-        self.block_size = seq_len
+        self.block_size = 1#seq_len
         self.apply(self._init_weights)
 
     def get_block_size(self):
@@ -228,10 +280,10 @@ class GPT(nn.Module):
         token_embeddings = token_embeddings.view(bz, -1, self.n_embd) # (B, an * T, C)
 
         # project velocity to n_embed
-        velocity_embeddings = self.vel_emb(velocity.unsqueeze(1)) # (B, C)
+        velocity_embeddings = self.vel_emb(velocity) # (B, C) .unsqueeze(1)
 
         # add (learnable) positional embedding and velocity embedding for all tokens
-        x = self.drop(self.pos_emb + token_embeddings + velocity_embeddings.unsqueeze(1)) # (B, an * T, C)
+        x = self.drop(self.pos_emb + token_embeddings + velocity_embeddings.unsqueeze(1)) #(B, an * T, C)
         # x = self.drop(token_embeddings + velocity_embeddings.unsqueeze(1)) # (B, an * T, C)
         x = self.blocks(x) # (B, an * T, C)
         x = self.ln_f(x) # (B, an * T, C)
@@ -256,7 +308,14 @@ class Encoder(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((self.config.vert_anchors, self.config.horz_anchors))
         
         self.image_encoder = ImageCNN(512, normalize=True)
+
+        #to use pretraining we need to repeat our kernel weights 3 times and divide the output by 3
+        self.image_encoder.features.conv1.weight = nn.Parameter(self.image_encoder.features.conv1.weight.repeat_interleave(self.config.seq_len, dim=1))
+        
         self.lidar_encoder = LidarEncoder(num_classes=512, in_channels=2)
+        self.lidar_encoder._model.conv1.weight = nn.Parameter(self.lidar_encoder._model.conv1.weight.repeat_interleave(self.config.seq_len, dim=1))
+
+        
 
         self.transformer1 = GPT(n_embd=64,
                             n_head=config.n_head, 
@@ -320,14 +379,16 @@ class Encoder(nn.Module):
         lidar_channel = lidar_list[0].shape[1]
         self.config.n_views = len(image_list) // self.config.seq_len
 
-        image_tensor = torch.stack(image_list, dim=1).view(bz * self.config.n_views * self.config.seq_len, img_channel, h, w)
-        lidar_tensor = torch.stack(lidar_list, dim=1).view(bz * self.config.seq_len, lidar_channel, h, w)
+        image_tensor = torch.cat(image_list, dim=1).view(bz * self.config.n_views, img_channel * self.config.seq_len, h, w)
+        lidar_tensor = torch.cat(lidar_list, dim=1)#.view(bz, lidar_channel * self.config.seq_len, h, w)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
+        image_features = image_features / self.config.seq_len # For stacked temporal reasoning
         image_features = self.image_encoder.features.bn1(image_features)
         image_features = self.image_encoder.features.relu(image_features)
         image_features = self.image_encoder.features.maxpool(image_features)
         lidar_features = self.lidar_encoder._model.conv1(lidar_tensor)
+        lidar_features = lidar_features / self.config.seq_len # For stacked temporal reasoning
         lidar_features = self.lidar_encoder._model.bn1(lidar_features)
         lidar_features = self.lidar_encoder._model.relu(lidar_features)
         lidar_features = self.lidar_encoder._model.maxpool(lidar_features)
@@ -378,10 +439,10 @@ class Encoder(nn.Module):
 
         image_features = self.image_encoder.features.avgpool(image_features)
         image_features = torch.flatten(image_features, 1)
-        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1)
+        image_features = image_features.view(bz, self.config.n_views * 1, -1) #self.config.seq_len
         lidar_features = self.lidar_encoder._model.avgpool(lidar_features)
         lidar_features = torch.flatten(lidar_features, 1)
-        lidar_features = lidar_features.view(bz, self.config.seq_len, -1)
+        lidar_features = lidar_features.view(bz, 1, -1) #elf.config.seq_len
 
         fused_features = torch.cat([image_features, lidar_features], dim=1)
         fused_features = torch.sum(fused_features, dim=1)
@@ -453,6 +514,7 @@ class TransFuser(nn.Module):
             target_point (tensor): goal location registered to ego-frame
             velocity (tensor): input velocity from speedometer
         '''
+        velocity = torch.stack(velocity, dim=1)
         fused_features, image_features_grid = self.encoder(image_list, lidar_list, velocity)
         z = self.join(fused_features)
 

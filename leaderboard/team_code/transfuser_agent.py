@@ -306,6 +306,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             input_lidars = [self.lidar_processed[i] for i in indices]
             #input_velocities = [self.input_buffer['velocity'][i] for i in indices] # Used when we use seq_len velocity values
             input_velocities = self.input_buffer['velocity'][indices[-1]] #Used when we only use 1 velocity value
+            
             #Debug input data.
             #for idx, elem in enumerate(input_lidars):
             #    Image.fromarray(cm.gist_earth(elem.cpu().numpy()[0, 1], bytes=True)).save(self.save_path / 'lidar_1' / (('%04d_' % self.step) + ('%04d.png' % idx)))

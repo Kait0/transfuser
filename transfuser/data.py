@@ -10,7 +10,7 @@ import sys
 
 class CARLA_Data(Dataset):
 
-    def __init__(self, root, config):
+    def __init__(self, root, config, machine=0):
         
         self.seq_len = config.seq_len
         self.pred_len = config.pred_len
@@ -38,10 +38,14 @@ class CARLA_Data(Dataset):
         
         for sub_root in tqdm(root, file=sys.stdout):
             print("Preload subroot", flush=True)
-            town = os.path.basename(os.path.normpath(sub_root))
-            print("Town: ", town, flush=True)
-            writefolder = '/mnt/qb/geiger/bjaeger25' #Workaround since I don't have write permissions in the dataset folder
-            preload_file = os.path.join(writefolder, str(town) + '_rg_lidar_diag_pl_'+str(self.seq_len)+'_'+str(self.pred_len)+'.npy')
+            if(machine==0):
+                town = os.path.basename(os.path.normpath(sub_root))
+                print("Town: ", town, flush=True)
+                writefolder = '/mnt/qb/geiger/bjaeger25' #Workaround since I don't have write permissions in the dataset folder
+                preload_file = os.path.join(writefolder, str(town) + '_rg_lidar_diag_pl_'+str(self.seq_len)+'_'+str(self.pred_len)+'.npy')
+            else:
+                preload_file = os.path.join(sub_root, 'dp_lidar360_front_angle_'+str(config.seq_len)+'_'+str(config.pred_len)+'.npy')
+            
             print("Preload_file: ", preload_file, flush=True)
 
             # dump to npy if no preload
@@ -74,14 +78,15 @@ class CARLA_Data(Dataset):
                     num_seq = (len(os.listdir(route_dir+"/rgb_front/"))-self.pred_len-2)//self.seq_len
                     
                     for seq in range(num_seq):
-                        fronts = []
-                        lefts = []
-                        rights = []
-                        rears = []
-                        lidars = []
-                        xs = []
-                        ys = []
-                        thetas = []
+                        fronts     = []
+                        lefts      = []
+                        rights     = []
+                        rears      = []
+                        lidars     = []
+                        xs         = []
+                        ys         = []
+                        thetas     = []
+                        velocities = []
 
                         # read files sequentially (past and current frames)
                         for i in range(self.seq_len):
@@ -101,6 +106,7 @@ class CARLA_Data(Dataset):
                             xs.append(data['x'])
                             ys.append(data['y'])
                             thetas.append(data['theta'])
+                            velocities.append(data['speed'])
 
                         # get control value of final frame in sequence
                         preload_x_command.append(data['x_command'])
@@ -109,7 +115,6 @@ class CARLA_Data(Dataset):
                         preload_throttle.append(data['throttle'])
                         preload_brake.append(data['brake'])
                         preload_command.append(data['command'])
-                        preload_velocity.append(data['speed'])
 
                         # read files sequentially (future frames)
                         for i in range(self.seq_len, self.seq_len + self.pred_len):
@@ -136,6 +141,7 @@ class CARLA_Data(Dataset):
                         preload_x.append(xs)
                         preload_y.append(ys)
                         preload_theta.append(thetas)
+                        preload_velocity.append(velocities)
 
                 # dump to npy
                 preload_dict = {}
@@ -182,20 +188,22 @@ class CARLA_Data(Dataset):
     def __getitem__(self, index):
         """Returns the item at index idx. """
         data = dict()
-        data['fronts'] = []
-        data['lefts'] = []
-        data['rights'] = []
-        data['rears'] = []
-        data['lidars'] = []
+        data['fronts']   = []
+        data['lefts']    = []
+        data['rights']   = []
+        data['rears']    = []
+        data['lidars']   = []
+        data['velocity'] = []
 
-        seq_fronts = self.front[index]
-        seq_lefts = self.left[index]
-        seq_rights = self.right[index]
-        seq_rears = self.rear[index]
-        seq_lidars = self.lidar[index]
-        seq_x = self.x[index]
-        seq_y = self.y[index]
-        seq_theta = self.theta[index]
+        seq_fronts   = self.front[index]
+        seq_lefts    = self.left[index]
+        seq_rights   = self.right[index]
+        seq_rears    = self.rear[index]
+        seq_lidars   = self.lidar[index]
+        seq_x        = self.x[index]
+        seq_y        = self.y[index]
+        seq_theta    = self.theta[index]
+        seq_velocity = self.velocity[index]
 
         full_lidar = []
         pos = []
@@ -218,6 +226,8 @@ class CARLA_Data(Dataset):
             # fix for theta=nan in some measurements
             if np.isnan(seq_theta[i]):
                 seq_theta[i] = 0.
+
+            data['velocity'].append(seq_velocity[i])
 
         ego_x = seq_x[i]
         ego_y = seq_y[i]
@@ -263,7 +273,6 @@ class CARLA_Data(Dataset):
         data['throttle'] = self.throttle[index]
         data['brake'] = self.brake[index]
         data['command'] = self.command[index]
-        data['velocity'] = self.velocity[index]
         
         return data
 
