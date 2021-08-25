@@ -372,7 +372,7 @@ class Encoder(nn.Module):
             velocity (tensor): input velocity from speedometer
         '''
         if self.image_encoder.normalize:
-            image_list = [normalize_imagenet(image_input) for image_input in image_list]
+            image_list = [normalize_kinetics(image_input) for image_input in image_list]
 
         bz, _, h, w = lidar_list[0].shape
         img_channel = image_list[0].shape[1]
