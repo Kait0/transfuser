@@ -441,6 +441,17 @@ def scale_and_crop_image(image, scale=1, crop=256):
     cropped_image = np.transpose(cropped_image, (2,0,1))
     return cropped_image
 
+def scale_and_crop_image_no_transpose(image, scale=1, crop=256):
+    """
+    Scale and crop a PIL image, returning a channels-first numpy array.
+    """
+    (width, height) = (int(image.width // scale), int(image.height // scale))
+    im_resized = image.resize((width, height))
+    image = np.asarray(im_resized)
+    start_x = height//2 - crop//2
+    start_y = width//2 - crop//2
+    cropped_image = image[start_x:start_x+crop, start_y:start_y+crop]
+    return cropped_image
 
 def transform_2d_points(xyz, r1, t1_x, t1_y, r2, t2_x, t2_y):
     """

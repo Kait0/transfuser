@@ -25,6 +25,17 @@ class GlobalConfig:
         5: [157, 234, 50],  # road line
         6: [255, 255, 255],  # sidewalk
     }
+
+    classes_list = [
+        [0, 0, 0],  # unlabeled
+        [0, 0, 255],  # vehicle
+        [128, 64, 128],  # road
+        [255, 0, 0],  # red light
+        [0, 255, 0],  # pedestrian
+        [157, 234, 50],  # road line
+        [255, 255, 255],  # sidewalk
+    ]
+
     converter = [
         0,  # unlabeled
         0,  # building

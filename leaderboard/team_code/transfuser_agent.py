@@ -15,7 +15,7 @@ from PIL import Image
 from leaderboard.autoagents import autonomous_agent
 from transfuser.model import TransFuser
 from transfuser.config import GlobalConfig
-from transfuser.data import scale_and_crop_image, lidar_to_histogram_features, transform_2d_points
+from transfuser.data import scale_and_crop_image, lidar_to_histogram_features, transform_2d_points, scale_and_crop_image_no_transpose
 from team_code.planner import RoutePlanner
 
 import math
@@ -43,6 +43,8 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         self.forced_move    = 0
         self.dilation       = 10 # Dilation that was applied when collecting the data.
         self.lidar_saftey   = []
+        self.sem = []
+        self.depth = []
 
         self.input_buffer = {'rgb': deque(), 'rgb_left': deque(), 'rgb_right': deque(), 
                             'rgb_rear': deque(), 'lidar': deque(), 'gps': deque(), 'thetas': deque(), 'velocity': deque()}
@@ -61,10 +63,12 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
 
             print (string)
 
-            self.save_path = pathlib.Path(os.environ['SAVE_PATH']) / string
+            self.save_path = pathlib.Path(SAVE_PATH) / string #os.environ['SAVE_PATH']
             self.save_path.mkdir(parents=True, exist_ok=False)
 
             (self.save_path / 'rgb').mkdir(parents=True, exist_ok=False)
+            (self.save_path / 'depth').mkdir(parents=True, exist_ok=False)
+            (self.save_path / 'semantic').mkdir(parents=True, exist_ok=False)
             (self.save_path / 'lidar_0').mkdir(parents=True, exist_ok=False)
             (self.save_path / 'lidar_1').mkdir(parents=True, exist_ok=False)
             (self.save_path / 'meta').mkdir(parents=True, exist_ok=False)
@@ -314,7 +318,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             #    elem = np.transpose(elem.cpu().numpy()[0], (1,2,0)).astype(np.uint8)
             #    Image.fromarray(elem).save(self.save_path / 'rgb' / (('%04d_' % self.step) + ('%04d.png' % idx)))
             
-            self.pred_wp, _, _ = self.net(input_images, input_lidars, target_point, input_velocities)
+            self.pred_wp, self.sem, self.depth = self.net(input_images, input_lidars, target_point, input_velocities)
 
         is_stuck = False
         if(self.stuck_detector > 900 and self.forced_move < 30): # 900 = 45 seconds * 20 Frames per second, we move for 1.5 second = 30 frames to unblock
@@ -349,18 +353,23 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             control.throttle = float(throttle)
             control.brake = float(brake)
 
-       # if SAVE_PATH is not None and self.step % self.dilation == 0:
-        #    self.save(tick_data)
+        if SAVE_PATH is not None and self.step % self.dilation == 0:
+            self.save(tick_data)
 
         return control
 
     def save(self, tick_data):
         frame = self.step // self.dilation
 
-        Image.fromarray(tick_data['rgb']).save(self.save_path / 'rgb' / ('%04d.png' % frame))
+        Image.fromarray(scale_and_crop_image_no_transpose(Image.fromarray(tick_data['rgb']))).save(self.save_path / 'rgb' / ('%04d.png' % frame))
 
-        Image.fromarray(cm.gist_earth(self.lidar_processed[0].cpu().numpy()[0, 0], bytes=True)).save(self.save_path / 'lidar_0' / ('%04d.png' % frame))
-        Image.fromarray(cm.gist_earth(self.lidar_processed[0].cpu().numpy()[0, 1], bytes=True)).save(self.save_path / 'lidar_1' / ('%04d.png' % frame))
+
+        Image.fromarray((self.depth.cpu().numpy() * 255).astype('uint8')[0]).save(self.save_path / 'depth' / ('%04d.png' % frame))
+        converter = np.array(self.config.classes_list)
+        Image.fromarray(converter[np.argmax(self.sem.cpu().numpy(), axis=1)[0, ...], ...].astype('uint8')).save(self.save_path / 'semantic' / ('%04d.png' % frame))
+
+        Image.fromarray(cm.gist_earth(self.lidar_processed[-1].cpu().numpy()[0, 0], bytes=True)).save(self.save_path / 'lidar_0' / ('%04d.png' % frame))
+        Image.fromarray(cm.gist_earth(self.lidar_processed[-1].cpu().numpy()[0, 1], bytes=True)).save(self.save_path / 'lidar_1' / ('%04d.png' % frame))
 
 
         outfile = open(self.save_path / 'meta' / ('%04d.json' % frame), 'w')
