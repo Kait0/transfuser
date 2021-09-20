@@ -214,6 +214,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             
             return control
 
+        gt_velocity = torch.FloatTensor([tick_data['speed']]).to('cuda', dtype=torch.float32)
         command = torch.FloatTensor([tick_data['next_command']]).to('cuda', dtype=torch.float32)
 
         tick_data['target_point'] = [torch.FloatTensor([tick_data['target_point'][0]]),
@@ -314,7 +315,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             #    elem = np.transpose(elem.cpu().numpy()[0], (1,2,0)).astype(np.uint8)
             #    Image.fromarray(elem).save(self.save_path / 'rgb' / (('%04d_' % self.step) + ('%04d.png' % idx)))
             
-            self.pred_wp, _, _ = self.net(input_images, input_lidars, target_point, input_velocities)
+            self.pred_wp = self.net(input_images, input_lidars, target_point, gt_velocity)
 
         is_stuck = False
         if(self.stuck_detector > 900 and self.forced_move < 30): # 900 = 45 seconds * 20 Frames per second, we move for 1.5 second = 30 frames to unblock
@@ -322,7 +323,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
             is_stuck = True
             self.forced_move += 1
             
-        gt_velocity = self.input_buffer['velocity'][-1]
+        #gt_velocity = self.input_buffer['velocity'][-1]
         steer, throttle, brake, metadata = self.net.control_pid(self.pred_wp, gt_velocity, is_stuck)
         self.pid_metadata = metadata
 
