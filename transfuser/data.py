@@ -371,7 +371,7 @@ def get_depth(data):
     data = np.transpose(data, (1,2,0))
     data = data.astype(np.float32)
 
-    normalized = np.dot(data, [65536.0, 256.0, 1.0]) 
+    normalized = np.dot(data, [1.0, 256.0, 65536.0]) 
     normalized /=  (256 * 256 * 256 - 1)
     # in_meters = 1000 * normalized
 
