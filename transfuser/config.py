@@ -69,7 +69,7 @@ class GlobalConfig:
 
     lr = 1e-4 # learning rate
     ls_seg   = 1.0
-    ls_depth = 10.0
+    ls_depth = 1.0
 
     # Conv Encoder
     vert_anchors = 8
