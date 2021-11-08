@@ -509,8 +509,9 @@ class TransFuser(nn.Module):
         fused_features, image_features_grid = self.encoder(image_list, lidar_list, velocity)
         z = self.join(fused_features)
 
-        semantic_segmentation = self.seg_decoder(image_features_grid)
-        depth_prediction      = self.depth_decoder(image_features_grid)
+        #Deactivated to speed up inference. Reactivate if you want to debug
+        semantic_segmentation = None#self.seg_decoder(image_features_grid)
+        depth_prediction      = None#self.depth_decoder(image_features_grid)
 
         output_wp = list()
 
