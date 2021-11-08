@@ -55,8 +55,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
         self.net = []
         for i in range(self.number_of_models):
             self.net.append(TransFuser(self.config, 'cuda'))
-            test = 'best_model_'+ str(i) + '.pth'
-            self.net[i].load_state_dict(torch.load(os.path.join(path_to_conf_file, test)))
+            self.net[i].load_state_dict(torch.load(os.path.join(path_to_conf_file, 'best_model_'+ str(i) + '.pth')))
             self.net[i].cuda()
             self.net[i].eval()
 
@@ -334,7 +333,7 @@ class TransFuserAgent(autonomous_agent.AutonomousAgent):
 
             self.pred_wp = torch.zeros([1,self.config.pred_len, 2],device='cuda') #TODO might need to adapt this for sequence lenghts > 1
             for i in range(self.number_of_models):
-                single_pred_waypoint, self.sem, self.depth = self.net[0](input_images, input_lidars, target_point, input_velocities)
+                single_pred_waypoint, self.sem, self.depth = self.net[i](input_images, input_lidars, target_point, input_velocities)
                 self.pred_wp += single_pred_waypoint
             self.pred_wp = self.pred_wp / self.number_of_models
 
